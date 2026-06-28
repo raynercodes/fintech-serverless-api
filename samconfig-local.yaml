@@ -1,0 +1,43 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: SAM Local Testing Template — NOT for deployment
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 30
+    MemorySize: 256
+    Environment:
+      Variables:
+        ENVIRONMENT: dev
+        DYNAMODB_TABLE_NAME: fintech-transactions-dev
+        CACHE_TABLE_NAME: fintech-cache-dev
+        SQS_QUEUE_URL: http://localhost:4566/000000000000/fintech-transactions-dev.fifo
+        FUNCTION_NAME: fintech-api-dev
+
+Resources:
+
+  FintechApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: fintech-api-dev
+      CodeUri: ./package/
+      Handler: src.api.main.handler
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            Path: /{proxy+}
+            Method: ANY
+        HealthEvent:
+          Type: Api
+          Properties:
+            Path: /health
+            Method: GET
+
+  FintechWorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: fintech-worker-dev
+      CodeUri: ./package/
+      Handler: src.worker.handler.handler
