@@ -8,7 +8,231 @@ Parameters:
     Default: dev
     AllowedValues: [dev, staging, prod]
 
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 30
+    MemorySize: 256
+    Environment:
+      Variables:
+        ENVIRONMENT: !Ref Environment
+        DYNAMODB_TABLE_NAME: !Ref FintechTransactionsTable
+        CACHE_TABLE_NAME: !Ref FintechCacheTable
+        SQS_QUEUE_URL: !Ref FintechTransactionQueue
+        FUNCTION_NAME: !Sub fintech-api-${Environment}
+
 Resources:
+
+  # -------------------------------------------------------
+  # SQS FIFO Queue
+  # -------------------------------------------------------
+  FintechTransactionQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub fintech-transactions-${Environment}.fifo
+      FifoQueue: true
+      ContentBasedDeduplication: false
+      VisibilityTimeout: 60
+      ReceiveMessageWaitTimeSeconds: 20
+      Tags:
+        - Key: Project
+          Value: fintech-serverless
+        - Key: Environment
+          Value: !Ref Environment
+
+  # -------------------------------------------------------
+  # Lambda Layers
+  # -------------------------------------------------------
+  FintechDependenciesLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub fintech-dependencies-${Environment}
+      Description: Shared dependencies for fintech Lambda functions
+      ContentUri: ../package/
+      CompatibleRuntimes:
+        - python3.12
+      RetentionPolicy: Delete
+
+  # -------------------------------------------------------
+  # IAM Role — shared across Lambda functions
+  # -------------------------------------------------------
+  FintechLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub fintech-lambda-role-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+      Policies:
+        - PolicyName: FintechLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # DynamoDB — scoped to fintech tables only
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:DescribeTable
+                  - dynamodb:TransactWriteItems
+                Resource:
+                  - !GetAtt FintechTransactionsTable.Arn
+                  - !Sub ${FintechTransactionsTable.Arn}/index/*
+                  - !GetAtt FintechCacheTable.Arn
+              # SQS — scoped to fintech queue only
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: !GetAtt FintechTransactionQueue.Arn
+              # Secrets Manager — scoped to fintech secrets only
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource: !Sub arn:aws:secretsmanager:us-east-1:${AWS::AccountId}:secret:/fintech/*
+              # KMS — for decrypting secrets
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                Resource: '*'
+              # CodeDeploy — for lifecycle hooks
+              - Effect: Allow
+                Action:
+                  - codedeploy:PutLifecycleEventHookExecutionStatus
+                Resource: '*'
+              # CloudWatch — for AfterAllowTraffic hook metrics
+              - Effect: Allow
+                Action:
+                  - cloudwatch:GetMetricStatistics
+                Resource: '*'
+
+  # -------------------------------------------------------
+  # Lambda — API Function
+  # -------------------------------------------------------
+  FintechApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub fintech-api-${Environment}
+      CodeUri: ../src/api/
+      Handler: main.handler
+      Role: !GetAtt FintechLambdaRole.Arn
+      Layers:
+        - !Ref FintechDependenciesLayer
+      Tracing: Active
+      AutoPublishAlias: !Ref Environment
+      DeploymentPreference:
+        Type: Canary10Percent15Minutes
+        Hooks:
+          PreTraffic: !Ref FintechValidateDeploymentFunction
+          PostTraffic: !Ref FintechValidateProductionFunction
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref FintechApi
+            Path: /{proxy+}
+            Method: ANY
+
+  # -------------------------------------------------------
+  # Lambda — Authorizer Function
+  # -------------------------------------------------------
+  FintechAuthorizerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub fintech-authorizer-${Environment}
+      CodeUri: ../src/authorizer/
+      Handler: handler.handler
+      Role: !GetAtt FintechLambdaRole.Arn
+      Layers:
+        - !Ref FintechDependenciesLayer
+      Tracing: Active
+
+  # -------------------------------------------------------
+  # Lambda — SQS Worker Function
+  # -------------------------------------------------------
+  FintechWorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub fintech-worker-${Environment}
+      CodeUri: ../src/worker/
+      Handler: handler.handler
+      Role: !GetAtt FintechLambdaRole.Arn
+      Layers:
+        - !Ref FintechDependenciesLayer
+      Tracing: Active
+      Events:
+        SQSEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt FintechTransactionQueue.Arn
+            BatchSize: 10
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+
+  # -------------------------------------------------------
+  # Lambda — BeforeAllowTraffic Hook
+  # -------------------------------------------------------
+  FintechValidateDeploymentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub fintech-validate-deployment-${Environment}
+      CodeUri: ../src/hooks/
+      Handler: validate_deployment.handler
+      Role: !GetAtt FintechLambdaRole.Arn
+      Tracing: Active
+
+  # -------------------------------------------------------
+  # Lambda — AfterAllowTraffic Hook
+  # -------------------------------------------------------
+  FintechValidateProductionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub fintech-validate-production-${Environment}
+      CodeUri: ../src/hooks/
+      Handler: validate_production.handler
+      Role: !GetAtt FintechLambdaRole.Arn
+      Tracing: Active
+
+  # -------------------------------------------------------
+  # API Gateway
+  # -------------------------------------------------------
+  FintechApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub fintech-api-${Environment}
+      StageName: !Ref Environment
+      TracingEnabled: true
+      Auth:
+        DefaultAuthorizer: FintechAuthorizer
+        Authorizers:
+          FintechAuthorizer:
+            FunctionArn: !GetAtt FintechAuthorizerFunction.Arn
+            Identity:
+              Header: Authorization
+            AuthorizerPayloadFormatVersion: "1.0"
+            EnableSimpleResponses: false
+      MethodSettings:
+        - ResourcePath: '/*'
+          HttpMethod: '*'
+          ThrottlingBurstLimit: 100
+          ThrottlingRateLimit: 50
+          LoggingLevel: INFO
+          DataTraceEnabled: false
+          MetricsEnabled: true
 
   # -------------------------------------------------------
   # DynamoDB — Main Transactions Table
@@ -18,8 +242,6 @@ Resources:
     Properties:
       TableName: !Sub fintech-transactions-${Environment}
       BillingMode: PAY_PER_REQUEST
-      PointInTimeRecoverySpecification:
-        PointInTimeRecoveryEnabled: false
       SSESpecification:
         SSEEnabled: true
         SSEType: KMS
@@ -62,7 +284,7 @@ Resources:
           Value: !Ref Environment
 
   # -------------------------------------------------------
-  # DynamoDB — Cache Table (L2 shared cache)
+  # DynamoDB — Cache Table
   # -------------------------------------------------------
   FintechCacheTable:
     Type: AWS::DynamoDB::Table
@@ -84,7 +306,36 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # -------------------------------------------------------
+  # CloudWatch — Billing Alarm
+  # -------------------------------------------------------
+  BillingAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub fintech-billing-alarm-${Environment}
+      AlarmDescription: Alert when AWS charges exceed $10
+      MetricName: EstimatedCharges
+      Namespace: AWS/Billing
+      Statistic: Maximum
+      Period: 86400
+      EvaluationPeriods: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: Currency
+          Value: USD
+
 Outputs:
+  ApiUrl:
+    Value: !Sub https://${FintechApi}.execute-api.us-east-1.amazonaws.com/${Environment}
+    Export:
+      Name: !Sub fintech-api-url-${Environment}
+
+  ApiId:
+    Value: !Ref FintechApi
+    Export:
+      Name: !Sub fintech-api-id-${Environment}
+
   TransactionsTableName:
     Value: !Ref FintechTransactionsTable
     Export:
@@ -99,3 +350,13 @@ Outputs:
     Value: !Ref FintechCacheTable
     Export:
       Name: !Sub fintech-cache-table-${Environment}
+
+  WorkerFunctionArn:
+    Value: !GetAtt FintechWorkerFunction.Arn
+    Export:
+      Name: !Sub fintech-worker-arn-${Environment}
+
+  QueueUrl:
+    Value: !Ref FintechTransactionQueue
+    Export:
+      Name: !Sub fintech-queue-url-${Environment}
