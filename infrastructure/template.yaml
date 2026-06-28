@@ -1,0 +1,101 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Fintech Serverless Loan Lending Platform
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+
+Resources:
+
+  # -------------------------------------------------------
+  # DynamoDB — Main Transactions Table
+  # -------------------------------------------------------
+  FintechTransactionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub fintech-transactions-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+      AttributeDefinitions:
+        - AttributeName: account_id
+          AttributeType: S
+        - AttributeName: timestamp_transaction_id
+          AttributeType: S
+        - AttributeName: transaction_id
+          AttributeType: S
+        - AttributeName: customer_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: account_id
+          KeyType: HASH
+        - AttributeName: timestamp_transaction_id
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: transaction-id-index
+          KeySchema:
+            - AttributeName: transaction_id
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: customer-id-index
+          KeySchema:
+            - AttributeName: customer_id
+              KeyType: HASH
+            - AttributeName: timestamp_transaction_id
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+      Tags:
+        - Key: Project
+          Value: fintech-serverless
+        - Key: Environment
+          Value: !Ref Environment
+
+  # -------------------------------------------------------
+  # DynamoDB — Cache Table (L2 shared cache)
+  # -------------------------------------------------------
+  FintechCacheTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub fintech-cache-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: cache_key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: cache_key
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+      Tags:
+        - Key: Project
+          Value: fintech-serverless
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  TransactionsTableName:
+    Value: !Ref FintechTransactionsTable
+    Export:
+      Name: !Sub fintech-transactions-table-${Environment}
+
+  TransactionsTableArn:
+    Value: !GetAtt FintechTransactionsTable.Arn
+    Export:
+      Name: !Sub fintech-transactions-table-arn-${Environment}
+
+  CacheTableName:
+    Value: !Ref FintechCacheTable
+    Export:
+      Name: !Sub fintech-cache-table-${Environment}
