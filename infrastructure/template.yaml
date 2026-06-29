@@ -24,6 +24,21 @@ Globals:
 Resources:
 
   # -------------------------------------------------------
+  # SQS FIFO Dead Letter Queue
+  # -------------------------------------------------------
+  FintechTransactionDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub fintech-transactions-dlq-${Environment}.fifo
+      FifoQueue: true
+      MessageRetentionPeriod: 1209600
+      Tags:
+        - Key: Project
+          Value: fintech-serverless
+        - Key: Environment
+          Value: !Ref Environment
+
+  # -------------------------------------------------------
   # SQS FIFO Queue
   # -------------------------------------------------------
   FintechTransactionQueue:
@@ -34,6 +49,9 @@ Resources:
       ContentBasedDeduplication: false
       VisibilityTimeout: 60
       ReceiveMessageWaitTimeSeconds: 20
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt FintechTransactionDLQ.Arn
+        maxReceiveCount: 3
       Tags:
         - Key: Project
           Value: fintech-serverless
@@ -121,21 +139,58 @@ Resources:
                 Resource: '*'
 
   # -------------------------------------------------------
+  # CodeDeploy Service Role
+  # -------------------------------------------------------
+  FintechCodeDeployServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub fintech-codedeploy-role-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codedeploy.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSCodeDeployRoleForLambda
+      Policies:
+        - PolicyName: CodeDeployLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:GetFunction
+                  - lambda:GetFunctionConfiguration
+                  - lambda:UpdateAlias
+                  - lambda:ListVersionsByFunction
+                  - lambda:InvokeFunction
+                  - lambda:GetAlias
+                  - lambda:UpdateFunctionCode
+                  - lambda:PublishVersion
+                  - codedeploy:*
+                  - cloudwatch:DescribeAlarms
+                  - sns:Publish
+                  - iam:PassRole
+                Resource: '*'
+
+  # -------------------------------------------------------
   # Lambda — API Function
   # -------------------------------------------------------
   FintechApiFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub fintech-api-${Environment}
-      CodeUri: ../src/api/
-      Handler: main.handler
+      Description: "FastAPI + Mangum handler for loan application endpoints"
+      CodeUri: ../package/
+      Handler: src.api.main.handler
       Role: !GetAtt FintechLambdaRole.Arn
-      Layers:
-        - !Ref FintechDependenciesLayer
       Tracing: Active
       AutoPublishAlias: !Ref Environment
       DeploymentPreference:
         Type: Canary10Percent15Minutes
+        Role: !GetAtt FintechCodeDeployServiceRole.Arn
         Hooks:
           PreTraffic: !Ref FintechValidateDeploymentFunction
           PostTraffic: !Ref FintechValidateProductionFunction
@@ -146,6 +201,14 @@ Resources:
             RestApiId: !Ref FintechApi
             Path: /{proxy+}
             Method: ANY
+        HealthEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref FintechApi
+            Path: /health
+            Method: GET
+            Auth:
+              Authorizer: NONE
 
   # -------------------------------------------------------
   # Lambda — Authorizer Function
@@ -154,11 +217,10 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub fintech-authorizer-${Environment}
-      CodeUri: ../src/authorizer/
-      Handler: handler.handler
+      Description: "Lambda Authorizer — JWT validation before main function invokes"
+      CodeUri: ../package/
+      Handler: src.authorizer.handler.handler
       Role: !GetAtt FintechLambdaRole.Arn
-      Layers:
-        - !Ref FintechDependenciesLayer
       Tracing: Active
 
   # -------------------------------------------------------
@@ -168,11 +230,10 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub fintech-worker-${Environment}
-      CodeUri: ../src/worker/
-      Handler: handler.handler
+      Description: "SQS FIFO worker — processes loan transactions asynchronously"
+      CodeUri: ../package/
+      Handler: src.worker.handler.handler
       Role: !GetAtt FintechLambdaRole.Arn
-      Layers:
-        - !Ref FintechDependenciesLayer
       Tracing: Active
       Events:
         SQSEvent:
@@ -190,8 +251,9 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub fintech-validate-deployment-${Environment}
-      CodeUri: ../src/hooks/
-      Handler: validate_deployment.handler
+      Description: "CodeDeploy BeforeAllowTraffic hook — pre-deployment sanity check"
+      CodeUri: ../package/
+      Handler: src.hooks.validate_deployment.handler
       Role: !GetAtt FintechLambdaRole.Arn
       Tracing: Active
 
@@ -202,10 +264,30 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub fintech-validate-production-${Environment}
-      CodeUri: ../src/hooks/
-      Handler: validate_production.handler
+      Description: "CodeDeploy AfterAllowTraffic hook — canary window error monitoring"
+      CodeUri: ../package/
+      Handler: src.hooks.validate_production.handler
       Role: !GetAtt FintechLambdaRole.Arn
       Tracing: Active
+
+  # -------------------------------------------------------
+  # Lambda Permission — allow CodeDeploy to invoke hooks
+  # -------------------------------------------------------
+  ValidateDeploymentPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt FintechValidateDeploymentFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: codedeploy.amazonaws.com
+      SourceArn: !Sub arn:aws:codedeploy:us-east-1:${AWS::AccountId}:deploymentgroup:*
+
+  ValidateProductionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt FintechValidateProductionFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: codedeploy.amazonaws.com
+      SourceArn: !Sub arn:aws:codedeploy:us-east-1:${AWS::AccountId}:deploymentgroup:*
 
   # -------------------------------------------------------
   # API Gateway
@@ -223,8 +305,12 @@ Resources:
             FunctionArn: !GetAtt FintechAuthorizerFunction.Arn
             Identity:
               Header: Authorization
-            AuthorizerPayloadFormatVersion: "1.0"
-            EnableSimpleResponses: false
+        ResourcePolicy:
+          CustomStatements:
+            - Effect: Allow
+              Principal: '*'
+              Action: execute-api:Invoke
+              Resource: !Sub arn:aws:execute-api:us-east-1:${AWS::AccountId}:*/${Environment}/GET/health
       MethodSettings:
         - ResourcePath: '/*'
           HttpMethod: '*'
@@ -360,3 +446,13 @@ Outputs:
     Value: !Ref FintechTransactionQueue
     Export:
       Name: !Sub fintech-queue-url-${Environment}
+
+  DLQUrl:
+    Value: !Ref FintechTransactionDLQ
+    Export:
+      Name: !Sub fintech-dlq-url-${Environment}
+
+  DLQArn:
+    Value: !GetAtt FintechTransactionDLQ.Arn
+    Export:
+      Name: !Sub fintech-dlq-arn-${Environment}
