@@ -39,8 +39,8 @@ def check_lockout(identifier: str) -> tuple[bool, int]:
         if item.get("expires_at") and item["expires_at"] < int(time.time()):
             return False, 0
 
-        attempts = item.get("attempts", 0)
-        locked_until = item.get("locked_until", 0)
+        attempts = int(item.get("attempts", 0)) + 1
+        locked_until = int(item.get("locked_until", 0))
 
         # Check if currently locked out
         if locked_until > int(time.time()):
@@ -69,7 +69,7 @@ def record_failed_attempt(identifier: str):
             attempts = 1
             locked_until = 0
         else:
-            attempts = item.get("attempts", 0) + 1
+            attempts = int(item.get("attempts", 0)) + 1
             locked_until = 0
 
         # Progressive lockout — same windows as Content Moderation API

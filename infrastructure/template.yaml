@@ -18,6 +18,7 @@ Globals:
         ENVIRONMENT: !Ref Environment
         DYNAMODB_TABLE_NAME: !Ref FintechTransactionsTable
         CACHE_TABLE_NAME: !Ref FintechCacheTable
+        USERS_TABLE_NAME: !Ref FintechUsersTable
         SQS_QUEUE_URL: !Ref FintechTransactionQueue
         FUNCTION_NAME: !Sub fintech-api-${Environment}
         APP_VERSION: "1.0.0"
@@ -108,6 +109,7 @@ Resources:
                   - !GetAtt FintechTransactionsTable.Arn
                   - !Sub ${FintechTransactionsTable.Arn}/index/*
                   - !GetAtt FintechCacheTable.Arn
+                  - !GetAtt FintechUsersTable.Arn
               # SQS — scoped to fintech queue only
               - Effect: Allow
                 Action:
@@ -190,7 +192,7 @@ Resources:
       Tracing: Active
       AutoPublishAlias: !Ref Environment
       DeploymentPreference:
-        Type: Canary10Percent15Minutes
+        Type: AllAtOnce # Canary10Percent15Minutes
         Role: !GetAtt FintechCodeDeployServiceRole.Arn
         Hooks:
           PreTraffic: !Ref FintechValidateDeploymentFunction
@@ -208,6 +210,54 @@ Resources:
             RestApiId: !Ref FintechApi
             Path: /health
             Method: GET
+            Auth:
+              Authorizer: NONE
+        DocsEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref FintechApi
+            Path: /docs
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        OpenApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref FintechApi
+            Path: /openapi.json
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        DocsStaticEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref FintechApi
+            Path: /docs/{asset}
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        AuthLoginEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref FintechApi
+            Path: /auth/login
+            Method: POST
+            Auth:
+              Authorizer: NONE
+        AuthRegisterEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref FintechApi
+            Path: /auth/register
+            Method: POST
+            Auth:
+              Authorizer: NONE
+        AuthDemoEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref FintechApi
+            Path: /auth/demo
+            Method: POST
             Auth:
               Authorizer: NONE
 
@@ -311,7 +361,17 @@ Resources:
             - Effect: Allow
               Principal: '*'
               Action: execute-api:Invoke
-              Resource: !Sub arn:aws:execute-api:us-east-1:${AWS::AccountId}:*/${Environment}/GET/health
+              Resource: 
+                - !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/${Environment}/GET/health
+                - !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/${Environment}/GET/docs
+                - !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/${Environment}/GET/openapi.json
+                - !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/${Environment}/GET/docs~1swagger-ui.css
+                - !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/${Environment}/GET/docs~1swagger-ui-bundle.js
+                - !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/${Environment}/GET/docs~1swagger-ui.css
+                - !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/${Environment}/GET/docs~1favicon.png
+                - !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/${Environment}/POST/auth/login
+                - !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/${Environment}/POST/auth/register
+                - !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/${Environment}/POST/auth/demo
       MethodSettings:
         - ResourcePath: '/*'
           HttpMethod: '*'
@@ -364,6 +424,29 @@ Resources:
       TimeToLiveSpecification:
         AttributeName: expires_at
         Enabled: true
+      Tags:
+        - Key: Project
+          Value: fintech-serverless
+        - Key: Environment
+          Value: !Ref Environment
+
+  # -------------------------------------------------------
+  # DynamoDB — Users Table
+  # -------------------------------------------------------
+  FintechUsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub fintech-users-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+      AttributeDefinitions:
+        - AttributeName: email
+          AttributeType: S
+      KeySchema:
+        - AttributeName: email
+          KeyType: HASH
       Tags:
         - Key: Project
           Value: fintech-serverless

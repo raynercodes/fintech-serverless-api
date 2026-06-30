@@ -7,21 +7,32 @@ router = APIRouter()
 def health_check():
     return {
         "status": "healthy",
-        "service": "fintech-serverless-api",
+        "service": "Fintech Serverless Loan Lending Platform",
         "version": os.environ.get("APP_VERSION", "1.0.0"),
         "environment": os.environ.get("ENVIRONMENT", "dev"),
+        "author": {
+            "name": "Leonardo Rayner",
+            "github": "github.com/raynercodes",
+            "portfolio": "raynercodes.dev",
+            "linkedin": "linkedin.com/in/leonardo-rayner-raynercodes/"
+        },
         "stack": {
             "runtime": "Python 3.12 + FastAPI + Mangum",
-            "compute": "AWS Lambda",
-            "database": "DynamoDB (on-demand)",
-            "queue": "SQS FIFO",
-            "auth": "JWT + Lambda Authorizer",
-            "deployment": "CodeDeploy Canary 10%/15min",
-            "tracing": "AWS X-Ray",
-            "cache": "L1 Lambda Execution Context + L2 DynamoDB"
+            "compute": "AWS Lambda (5 functions)",
+            "database": "DynamoDB on-demand — composite sort key, 2 GSIs, zero table scans",
+            "queue": "SQS FIFO — two-layer duplicate prevention with conditional writes",
+            "auth": "JWT + Lambda Authorizer + brute force progressive lockout",
+            "encryption": "AES-256-GCM on sensitive PII — separate KMS key per secret category",
+            "caching": "L0 CloudFront + L1 Lambda execution context + L2 DynamoDB cache table",
+            "deployment": "CodeDeploy canary 10%/15min — automated rollback via CloudWatch alarms",
+            "pipeline": "GitHub Actions CI → CodePipeline CD — two manual approval gates",
+            "iac": "AWS SAM + CloudFormation — single source of truth",
+            "observability": "X-Ray tracing + CloudWatch structured logging",
+            "maintenance": "EventBridge CRON — automated cleanup and backups"
         },
         "links": {
-            "docs": "/dev/docs",
-            "github": "github.com/raynercodes/fintech-serverless-api"
+            "interactive docs": "https://pw4kfpuw3f.execute-api.us-east-1.amazonaws.com/dev/docs",
+            "github": "github.com/raynercodes/fintech-serverless-api",
+            "portfolio": "raynercodes.dev"
         }
     }

@@ -1,9 +1,15 @@
 import os
 from fastapi import FastAPI
+from fastapi.security import HTTPBearer
 from mangum import Mangum
 from src.api.routes import loans, health
 
 APP_VERSION = os.environ.get("APP_VERSION", "1.0.0")
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "dev")
+
+# Declares the Bearer auth scheme so Swagger UI renders the Authorize button
+# Actual enforcement happens at the Lambda Authorizer — this is documentation only
+bearer_scheme = HTTPBearer()
 
 app = FastAPI(
     title="Fintech Serverless API",
@@ -29,7 +35,8 @@ All endpoints except `/health` require a Bearer JWT token in the Authorization h
         "url": "https://raynercodes.dev",
         "email": "raynercodes@gmail.com",
         "LinkedIn": "https://www.linkedin.com/in/leonardo-rayner-raynercodes/",
-    }
+    },
+    root_path=f"/{ENVIRONMENT}"
 )
 
 app.include_router(health.router)

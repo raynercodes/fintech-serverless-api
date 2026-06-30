@@ -5,6 +5,10 @@ import os
 from moto import mock_aws
 from fastapi.testclient import TestClient
 from unittest.mock import patch
+from jose import jwt as jose_jwt
+import time
+
+TEST_JWT_SECRET = "test-secret-key-for-unit-tests-only"
 
 # Set environment variables before importing the app
 # Must happen before any imports that read os.environ
@@ -87,9 +91,22 @@ def test_health_check():
     assert response.status_code == 200
     assert response.json()["status"] == "healthy"
 
+@pytest.fixture
+def auth_headers():
+    # Generate a valid test JWT — same structure the authorizer expects
+    # Bypasses real Secrets Manager — test-only secret
+    now = int(time.time())
+    payload = {
+        "account_id": "acc_001",
+        "customer_id": "cust_001",
+        "iat": now,
+        "exp": now + 3600
+    }
+    token = jose_jwt.encode(payload, TEST_JWT_SECRET, algorithm="HS256")
+    return {"Authorization": f"Bearer {token}"}
 
 @mock_aws
-def test_submit_loan_application(dynamodb_tables):
+def test_submit_loan_application(dynamodb_tables, auth_headers):
     with patch("src.api.routes.loans.get_sqs") as mock_sqs:
         mock_sqs.return_value.send_message.return_value = {
             "MessageId": "test-message-id"
@@ -103,7 +120,8 @@ def test_submit_loan_application(dynamodb_tables):
                 "amount": 5000.00,
                 "type": "deposit",
                 "description": "Initial loan deposit"
-            }
+            },
+            headers=auth_headers
         )
 
         assert response.status_code == 201
@@ -117,7 +135,7 @@ def test_submit_loan_application(dynamodb_tables):
 
 
 @mock_aws
-def test_submit_loan_invalid_amount(dynamodb_tables):
+def test_submit_loan_invalid_amount(dynamodb_tables, auth_headers):
     with patch("src.api.routes.loans.get_sqs"):
         response = client.post(
             "/loans/",
@@ -126,13 +144,14 @@ def test_submit_loan_invalid_amount(dynamodb_tables):
                 "customer_id": "cust_001",
                 "amount": -500.00,
                 "type": "deposit"
-            }
+            },
+            headers=auth_headers
         )
         assert response.status_code == 422
 
 
 @mock_aws
-def test_submit_loan_invalid_type(dynamodb_tables):
+def test_submit_loan_invalid_type(dynamodb_tables, auth_headers):
     with patch("src.api.routes.loans.get_sqs"):
         response = client.post(
             "/loans/",
@@ -141,26 +160,27 @@ def test_submit_loan_invalid_type(dynamodb_tables):
                 "customer_id": "cust_001",
                 "amount": 1000.00,
                 "type": "invalid_type"
-            }
+            },
+            headers=auth_headers
         )
         assert response.status_code == 422
 
 
 @mock_aws
-def test_get_loan_not_found(dynamodb_tables):
-    response = client.get("/loans/nonexistent-id")
+def test_get_loan_not_found(dynamodb_tables, auth_headers):
+    response = client.get("/loans/nonexistent-id", headers=auth_headers)
     assert response.status_code == 404
 
 
 @mock_aws
-def test_get_loans_by_account_empty(dynamodb_tables):
-    response = client.get("/loans/account/acc_999")
+def test_get_loans_by_account_empty(dynamodb_tables, auth_headers):
+    response = client.get("/loans/account/acc_999", headers=auth_headers)
     assert response.status_code == 200
     assert response.json() == []
 
 
 @mock_aws
-def test_get_loans_by_customer_empty(dynamodb_tables):
-    response = client.get("/loans/customer/cust_999")
+def test_get_loans_by_customer_empty(dynamodb_tables, auth_headers):
+    response = client.get("/loans/customer/cust_999", headers=auth_headers)
     assert response.status_code == 200
     assert response.json() == []

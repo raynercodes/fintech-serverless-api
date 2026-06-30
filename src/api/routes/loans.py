@@ -3,7 +3,8 @@ import uuid
 import os
 import boto3
 from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Depends
+from fastapi.security import HTTPBearer
 from boto3.dynamodb.conditions import Key
 from src.api.models.loan import (
     LoanApplicationRequest,
@@ -15,6 +16,7 @@ from src.api.core.database import get_transactions_table
 from src.api.core.cache import cache_get, cache_set, cache_delete
 
 router = APIRouter()
+bearer_scheme = HTTPBearer()
 
 # Outside handler — L1 cached in execution context
 _sqs = None
@@ -35,7 +37,7 @@ def get_table():
     return _table
 
 
-@router.post("/", response_model=LoanApplicationResponse, status_code=201)
+@router.post("/", response_model=LoanApplicationResponse, status_code=201, dependencies=[Depends(bearer_scheme)])
 async def submit_loan_application(request: LoanApplicationRequest, req: Request):
     transaction_id = str(uuid.uuid4())
     timestamp = datetime.now(timezone.utc).isoformat()
@@ -96,7 +98,7 @@ async def submit_loan_application(request: LoanApplicationRequest, req: Request)
     )
 
 
-@router.get("/{loan_id}", response_model=LoanApplicationResponse)
+@router.get("/{loan_id}", response_model=LoanApplicationResponse, dependencies=[Depends(bearer_scheme)])
 async def get_loan(loan_id: str):
     # L1/L2 cache check first
     cache_key = f"loan:{loan_id}"
@@ -137,7 +139,7 @@ async def get_loan(loan_id: str):
     return response
 
 
-@router.get("/account/{account_id}")
+@router.get("/account/{account_id}", dependencies=[Depends(bearer_scheme)])
 async def get_loans_by_account(account_id: str):
     # L1/L2 cache check first
     cache_key = f"account:{account_id}:transactions"
@@ -174,7 +176,7 @@ async def get_loans_by_account(account_id: str):
     return response
 
 
-@router.get("/customer/{customer_id}")
+@router.get("/customer/{customer_id}", dependencies=[Depends(bearer_scheme)])
 async def get_loans_by_customer(customer_id: str):
     # L1/L2 cache check first
     cache_key = f"customer:{customer_id}:transactions"
@@ -211,7 +213,7 @@ async def get_loans_by_customer(customer_id: str):
     return response
 
 
-@router.patch("/{loan_id}/status", response_model=LoanApplicationResponse)
+@router.patch("/{loan_id}/status", response_model=LoanApplicationResponse, dependencies=[Depends(bearer_scheme)])
 async def update_loan_status(loan_id: str, status_update: LoanStatusUpdate):
     table = get_table()
 

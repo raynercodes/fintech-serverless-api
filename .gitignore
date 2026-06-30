@@ -10,3 +10,5 @@ venv/
 samconfig.toml
 .DS_Store
 env.json
+.vscode/
+pytest.ini
