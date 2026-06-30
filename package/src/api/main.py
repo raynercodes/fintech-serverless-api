@@ -2,7 +2,7 @@ import os
 from fastapi import FastAPI
 from fastapi.security import HTTPBearer
 from mangum import Mangum
-from src.api.routes import loans, health
+from src.api.routes import loans, health, auth
 
 APP_VERSION = os.environ.get("APP_VERSION", "1.0.0")
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "dev")
@@ -40,6 +40,7 @@ All endpoints except `/health` require a Bearer JWT token in the Authorization h
 )
 
 app.include_router(health.router)
+app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(loans.router, prefix="/loans", tags=["loans"])
 
 handler = Mangum(app, lifespan="off")

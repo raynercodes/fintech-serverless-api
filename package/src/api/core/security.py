@@ -1,17 +1,109 @@
 import os
 import json
 import base64
+import time
 import boto3
 from jose import jwt, JWTError
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from datetime import datetime, timezone
 import secrets
 
-# Outside handler — L1 cached in Lambda execution context
+# Outside handler — L1 cached in Lambda execution context — fetched once per cold start
 # Only fetched from Secrets Manager on cold start
 _jwt_secret = None
 _encryption_key = None
+_password_pepper = None
 
+# Password hashing — for user registration and login
+# Uses PBKDF2-HMAC-SHA256 via the standard library's hashlib
+# No external dependency needed — same algorithm family bcrypt uses
+# under the hood, but built into Python so no extra package weight
+# on the Lambda deployment package
+import hashlib
+import secrets as secrets_module
+
+
+def get_password_pepper() -> str:
+    global _password_pepper
+    if _password_pepper is None:
+        client = boto3.client("secretsmanager", region_name="us-east-1")
+        response = client.get_secret_value(
+            SecretId="/fintech/prod/password-pepper"
+        )
+        _password_pepper = json.loads(response["SecretString"])["pepper"]
+    return _password_pepper
+
+def hash_password(password: str) -> str:
+    # Pepper — secret value from Secrets Manager, never stored in the database
+    # Defense in depth — even a fully compromised DynamoDB table is unusable
+    # without also compromising Secrets Manager separately
+    pepper = get_password_pepper()
+    peppered_password = password + pepper
+    # Generate a random 16-byte salt — unique per password
+    # Same principle as the nonce in AES-GCM encryption
+    # Prevents identical passwords from producing identical hashes
+    salt = secrets_module.token_bytes(16)
+
+    # PBKDF2 — deliberately slow hashing function
+    # 200,000 iterations makes brute force attacks computationally expensive
+    # Each guess an attacker tries costs real CPU time, not microseconds
+    hashed = hashlib.pbkdf2_hmac(
+        "sha256",
+        peppered_password.encode("utf-8"),
+        salt,
+        600_000
+    )
+
+    # Store salt + hash together, base64 encoded
+    # Salt must be stored alongside the hash — you need it to verify later
+    # Pepper is NEVER stored here — it lives only in Secrets Manager
+    combined = salt + hashed
+    return base64.b64encode(combined).decode("utf-8")
+
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    try:
+        pepper = get_password_pepper()
+        peppered_password = password + pepper
+
+        combined = base64.b64decode(stored_hash)
+
+        # Salt is always the first 16 bytes — same split pattern as decrypt_pii
+        salt = combined[:16]
+        original_hash = combined[16:]
+
+        # Recompute the hash using the same salt that was stored
+        # If the password is correct the hashes will match exactly
+        new_hash = hashlib.pbkdf2_hmac(
+            "sha256",
+            peppered_password.encode("utf-8"),
+            salt,
+            600_000
+        )
+
+        # Constant-time comparison — prevents timing attacks
+        # A regular == comparison can leak information about how many
+        # characters matched based on how long the comparison took
+        return secrets_module.compare_digest(new_hash, original_hash)
+    except Exception:
+        return False
+
+
+def create_jwt(account_id: str, customer_id: str, expires_in_seconds: int = 900) -> str:
+    secret = get_jwt_secret()
+    now = int(time.time())
+
+    # Standard JWT claims — iat (issued at) and exp (expiry)
+    # Same short-lived token pattern as my Content Moderation API
+    # "iat" is the issued-at timestamp, "exp" is the expiration timestamp
+    payload = {
+        "account_id": account_id,
+        "customer_id": customer_id,
+        "iat": now,
+        "exp": now + expires_in_seconds
+    }
+
+    return jwt.encode(payload, secret, algorithm="HS256")
 
 def get_jwt_secret() -> str:
     global _jwt_secret
