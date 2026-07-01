@@ -16,23 +16,42 @@ app = FastAPI(
     description="""
 ## Small Business Loan Lending Platform
 
-Serverless fintech API built on AWS Lambda, DynamoDB, and SQS FIFO.
+Serverless fintech API built on AWS Lambda, DynamoDB, and SQS FIFO — modeled after real fintech infrastructure.
 
-### Features
-- Loan application submission and tracking
-- Async transaction processing via SQS FIFO
-- JWT authentication with Lambda Authorizer
-- AES-256-GCM encryption on sensitive PII
-- L1/L2 caching strategy
-- CodeDeploy canary deployments
+---
 
-### Auth
-All endpoints except `/health` require a Bearer JWT token in the Authorization header.
-    """,
+## 🚀 Quick Start — Test in 30 Seconds
+
+**Step 1:** Hit `POST /auth/demo` — no registration needed, returns a JWT instantly
+
+**Step 2:** Copy the `access_token` from the response
+
+**Step 3:** Click the **Authorize** button above, paste the token, click **Authorize**
+
+**Step 4:** Test any endpoint — submit a loan application, check its status, query by account
+
+---
+
+## Architecture
+- **Compute:** AWS Lambda + FastAPI + Mangum
+- **Database:** DynamoDB on-demand — composite sort key, 2 GSIs, zero table scans
+- **Queue:** SQS FIFO — two-layer duplicate prevention
+- **Auth:** JWT + Lambda Authorizer + brute force progressive lockout
+- **Encryption:** AES-256-GCM on sensitive PII — separate KMS key per secret category
+- **Caching:** L0 CloudFront + L1 Lambda execution context + L2 DynamoDB
+- **Deployment:** CodeDeploy canary 10%/15min with automated rollback
+- **Pipeline:** GitHub Actions CI → CodePipeline CD — two manual approval gates
+
+---
+
+## Auth
+All endpoints except `/health` and `/auth/*` require a Bearer JWT token.
+Tokens expire in **15 minutes** — hit `/auth/demo` again for a fresh one.
+""",
     version="1.0.0",
     contact={
         "name": "Leonardo Rayner",
-        "url": "https://raynercodes.dev",
+        "url": "https://pw4kfpuw3f.execute-api.us-east-1.amazonaws.com/dev/health",
         "email": "raynercodes@gmail.com",
         "LinkedIn": "https://www.linkedin.com/in/leonardo-rayner-raynercodes/",
     },

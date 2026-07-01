@@ -34,5 +34,12 @@ def health_check():
             "interactive docs": "https://pw4kfpuw3f.execute-api.us-east-1.amazonaws.com/dev/docs",
             "github": "github.com/raynercodes/fintech-serverless-api",
             "portfolio": "raynercodes.dev"
+        },
+        "instructions": {
+            "step_1": "GET /dev/health — you are here",
+            "step_2": "POST /dev/auth/demo — get a JWT token instantly, no registration needed",
+            "step_3": "Click Authorize in /dev/docs and paste the access_token",
+            "step_4": "Test any protected endpoint — submit a loan, check status, query by account",
+            "docs": "https://pw4kfpuw3f.execute-api.us-east-1.amazonaws.com/dev/docs"
         }
     }
