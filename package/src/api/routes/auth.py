@@ -16,6 +16,7 @@ from src.api.core.users_db import (
     get_user_by_email,
     create_user
 )
+from datetime import datetime, timedelta
 
 router = APIRouter()
 bearer_scheme = HTTPBearer()
@@ -113,6 +114,7 @@ Token expires in **15 minutes**.
 async def login(request: UserLoginRequest):
     # Fetch user by email — O(1) DynamoDB get_item on partition key
     user = get_user_by_email(request.email)
+    JWT_EXP_TIME = datetime.now() + timedelta(seconds=900)
 
     if user is None:
         # User not found — same error as wrong password
@@ -156,7 +158,7 @@ async def login(request: UserLoginRequest):
     return TokenResponse(
         access_token=access_token,
         token_type="bearer",
-        expires_in=900,
+        expires_in=f"15 minutes — Timestamp: {JWT_EXP_TIME.strftime("%A, %Y-%m-%d %I:%M:%S %p")}",
         account_id=user["account_id"],
         customer_id=user["customer_id"]
     )
@@ -178,6 +180,7 @@ async def demo_login():
     # Check if demo account exists — create it if not
     # Self-healing demo account — always available regardless of DB state
     demo_user = get_user_by_email(DEMO_EMAIL)
+    JWT_EXP_TIME = datetime.now() + timedelta(seconds=900)
 
     if demo_user is None:
         # Auto-create demo account on first hit
@@ -204,7 +207,7 @@ async def demo_login():
     return TokenResponse(
         access_token=access_token,
         token_type="bearer",
-        expires_in=900,
+        expires_in=f"15 minutes — Timestamp: {JWT_EXP_TIME.strftime("%A, %Y-%m-%d %I:%M:%S %p")}",
         account_id=DEMO_ACCOUNT_ID,
         customer_id=DEMO_CUSTOMER_ID
     )

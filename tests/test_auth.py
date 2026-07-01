@@ -61,7 +61,7 @@ def test_register_success(users_table):
             "/auth/register",
             json={
                 "email": "test@example.com",
-                "password": "TestPass1",
+                "password": "TestPass1!",
                 "account_id": "acc_001",
                 "customer_id": "cust_001"
             }
@@ -86,7 +86,7 @@ def test_register_duplicate_email(users_table):
             "/auth/register",
             json={
                 "email": "duplicate@example.com",
-                "password": "TestPass1",
+                "password": "TestPass1!",
                 "account_id": "acc_001",
                 "customer_id": "cust_001"
             }
@@ -97,7 +97,7 @@ def test_register_duplicate_email(users_table):
             "/auth/register",
             json={
                 "email": "duplicate@example.com",
-                "password": "TestPass1",
+                "password": "TestPass1!",
                 "account_id": "acc_002",
                 "customer_id": "cust_002"
             }
@@ -113,7 +113,7 @@ def test_register_weak_password_no_uppercase(users_table):
         "/auth/register",
         json={
             "email": "test@example.com",
-            "password": "testpass1",
+            "password": "testpass1!",
             "account_id": "acc_001",
             "customer_id": "cust_001"
         }
@@ -141,7 +141,7 @@ def test_register_invalid_email(users_table):
         "/auth/register",
         json={
             "email": "notanemail",
-            "password": "TestPass1",
+            "password": "TestPass1!",
             "account_id": "acc_001",
             "customer_id": "cust_001"
         }
@@ -165,7 +165,7 @@ def test_login_success(users_table):
             "/auth/register",
             json={
                 "email": "login@example.com",
-                "password": "TestPass1",
+                "password": "TestPass1!",
                 "account_id": "acc_001",
                 "customer_id": "cust_001"
             }
@@ -176,7 +176,7 @@ def test_login_success(users_table):
             "/auth/login",
             json={
                 "email": "login@example.com",
-                "password": "TestPass1"
+                "password": "TestPass1!"
             }
         )
 
@@ -184,7 +184,7 @@ def test_login_success(users_table):
         data = response.json()
         assert "access_token" in data
         assert data["token_type"] == "bearer"
-        assert data["expires_in"] == 900
+        assert "15 minutes" in data["expires_in"]
         assert data["account_id"] == "acc_001"
         assert data["customer_id"] == "cust_001"
 
@@ -199,7 +199,7 @@ def test_login_wrong_password(users_table):
             "/auth/register",
             json={
                 "email": "wrongpass@example.com",
-                "password": "TestPass1",
+                "password": "TestPass1!",
                 "account_id": "acc_001",
                 "customer_id": "cust_001"
             }
@@ -227,12 +227,40 @@ def test_login_nonexistent_email(users_table):
             "/auth/login",
             json={
                 "email": "nobody@example.com",
-                "password": "TestPass1"
+                "password": "TestPass1!"
             }
         )
 
         assert response.status_code == 401
         assert response.json()["detail"] == "Invalid credentials"
+
+
+@mock_aws
+def test_register_weak_password_no_lowercase(users_table):
+    response = client.post(
+        "/auth/register",
+        json={
+            "email": "test@example.com",
+            "password": "TESTPASS1!",
+            "account_id": "acc_001",
+            "customer_id": "cust_001"
+        }
+    )
+    assert response.status_code == 422
+
+
+@mock_aws
+def test_register_weak_password_no_special_character(users_table):
+    response = client.post(
+        "/auth/register",
+        json={
+            "email": "test@example.com",
+            "password": "TestPass1",
+            "account_id": "acc_001",
+            "customer_id": "cust_001"
+        }
+    )
+    assert response.status_code == 422
 
 
 @mock_aws
@@ -245,7 +273,7 @@ def test_login_uniform_error_message(users_table):
             "/auth/login",
             json={
                 "email": "nobody@example.com",
-                "password": "TestPass1"
+                "password": "TestPass1!"
             }
         )
 
@@ -254,7 +282,7 @@ def test_login_uniform_error_message(users_table):
             "/auth/register",
             json={
                 "email": "real@example.com",
-                "password": "TestPass1",
+                "password": "TestPass1!",
                 "account_id": "acc_001",
                 "customer_id": "cust_001"
             }
@@ -264,7 +292,7 @@ def test_login_uniform_error_message(users_table):
             "/auth/login",
             json={
                 "email": "real@example.com",
-                "password": "WrongPass1"
+                "password": "WrongPass1!"
             }
         )
 
@@ -291,7 +319,7 @@ def test_demo_returns_token(users_table):
         data = response.json()
         assert "access_token" in data
         assert data["token_type"] == "bearer"
-        assert data["expires_in"] == 900
+        assert "15 minutes" in data["expires_in"]
         assert data["account_id"] == "acc_demo_001"
         assert data["customer_id"] == "cust_demo_001"
 

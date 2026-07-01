@@ -3,7 +3,7 @@ import uuid
 import os
 import boto3
 from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException, Request, Depends
+from fastapi import APIRouter, HTTPException, Request, Depends, Path
 from fastapi.security import HTTPBearer
 from boto3.dynamodb.conditions import Key
 from src.api.models.loan import (
@@ -37,7 +37,26 @@ def get_table():
     return _table
 
 
-@router.post("/", response_model=LoanApplicationResponse, status_code=201, dependencies=[Depends(bearer_scheme)])
+@router.post(
+        "/",
+        response_model=LoanApplicationResponse,
+        status_code=201,
+        summary="Submit Loan Application",
+        description="""
+Submit a new loan application for processing.
+
+**Note:** Must be registered, logged in, and authorized to submit a loan application.
+
+**Instructions:**
+1. Make sure you are authorized — click **Authorize** at the top and paste your token from `POST /auth/demo`
+2. Click **Try it out** then **Execute** — the fields are pre-populated with demo values
+3. Copy the `transaction_id` from the response — this is your **loan ID**
+4. Use that `transaction_id` in `GET /loans/{loan_id}` to check your loan status
+
+Processing is async — status starts as `pending` and updates to `funded` within a few seconds once the worker processes it via SQS FIFO.
+    """,
+        dependencies=[Depends(bearer_scheme)]
+)
 async def submit_loan_application(request: LoanApplicationRequest, req: Request):
     transaction_id = str(uuid.uuid4())
     timestamp = datetime.now(timezone.utc).isoformat()
@@ -98,8 +117,35 @@ async def submit_loan_application(request: LoanApplicationRequest, req: Request)
     )
 
 
-@router.get("/{loan_id}", response_model=LoanApplicationResponse, dependencies=[Depends(bearer_scheme)])
-async def get_loan(loan_id: str):
+@router.get(
+        "/{loan_id}",
+        response_model=LoanApplicationResponse,
+        status_code=201,
+        summary="Get Loan Status",
+        description="""
+Retrieve a loan application by its ID.
+
+**Note:** Must be registered, logged in, and authorized to check your loan status.
+
+**Instructions:**
+1. Copy the `transaction_id` (returned from the `POST /loans/` response) into the `loan_id` field
+2. Click **Try it out**
+3. Paste the `transaction_id` into the `loan_id` field
+4. Click **Execute**
+
+The `loan_id` is the same value as `transaction_id` — it's your unique loan reference number.
+
+**Status lifecycle:** `pending` → `funded` (allow a few seconds for async processing)
+    """,
+        dependencies=[Depends(bearer_scheme)]
+)
+async def get_loan(
+    loan_id: str = Path(
+        ...,
+        description="The transaction_id returned from POST /loans/",
+        examples=["YOUR_TRANSACTION_ID"]
+    )
+):
     # L1/L2 cache check first
     cache_key = f"loan:{loan_id}"
     cached = cache_get(cache_key)
@@ -139,7 +185,24 @@ async def get_loan(loan_id: str):
     return response
 
 
-@router.get("/account/{account_id}", dependencies=[Depends(bearer_scheme)])
+@router.get(
+        "/account/{account_id}",
+        summary="Get All Loans by Account",
+        description="""
+Retrieve all loan transactions for a specific account.
+
+**Note:** Must be registered, logged in, and authorized to view your account transactions.
+
+**Instructions:**
+1. Click **Try it out**
+2. Enter `acc_demo_001` in the `account_id` (returned from the `POST /auth/demo` response) field — this is the demo account
+3. Click **Execute**
+4. If using your own customer account, enter your `account_id` from the login response and click **Execute**
+
+Returns all transactions associated with that account ordered by timestamp.
+    """,
+        dependencies=[Depends(bearer_scheme)]
+)
 async def get_loans_by_account(account_id: str):
     # L1/L2 cache check first
     cache_key = f"account:{account_id}:transactions"
@@ -176,7 +239,24 @@ async def get_loans_by_account(account_id: str):
     return response
 
 
-@router.get("/customer/{customer_id}", dependencies=[Depends(bearer_scheme)])
+@router.get(
+        "/customer/{customer_id}",
+        summary="Get All Loans by Customer",
+        description="""
+Retrieve all loan transactions across all accounts for a specific customer.
+
+**Note:** Must be registered, logged in, and authorized to check all of your customer loans.
+
+**Instructions:**
+1. Click **Try it out**
+2. Enter `cust_demo_001` in the `customer_id` (returned from the `POST /auth/demo` response) field — this is the demo customer
+3. Click **Execute**
+4. If using your own customer account, enter your `customer_id` from the login response and click **Execute**
+
+A customer can have multiple accounts — this endpoint returns transactions across all of them via GSI 2.
+    """,
+        dependencies=[Depends(bearer_scheme)]
+)
 async def get_loans_by_customer(customer_id: str):
     # L1/L2 cache check first
     cache_key = f"customer:{customer_id}:transactions"
@@ -213,7 +293,25 @@ async def get_loans_by_customer(customer_id: str):
     return response
 
 
-@router.patch("/{loan_id}/status", response_model=LoanApplicationResponse, dependencies=[Depends(bearer_scheme)])
+@router.patch(
+        "/{loan_id}/status",
+        response_model=LoanApplicationResponse,
+        summary="Update Loan Status",
+        description="""
+Update the status of a pending loan application.
+
+Note: Only `pending` loans can be updated — this prevents race conditions where two requests try to update the same loan simultaneously.
+      Must be registered, logged in, and authorized to update a loan status.
+
+**Instructions:**
+1. Submit a loan via `POST /loans/` and copy the `transaction_id` (returned in the response) — this is your **loan ID**
+2. Click **Try it out**
+3. Paste the `transaction_id` into the `loan_id` field
+4. Set status to `approved`, `funded`, `repaid`, or `defaulted`
+5. Click **Execute**
+    """,
+        dependencies=[Depends(bearer_scheme)]
+)
 async def update_loan_status(loan_id: str, status_update: LoanStatusUpdate):
     table = get_table()
 

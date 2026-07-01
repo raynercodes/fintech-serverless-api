@@ -19,11 +19,11 @@ class LoanStatus(str, Enum):
 
 
 class LoanApplicationRequest(BaseModel):
-    account_id: str = Field(..., min_length=1, description="Account identifier")
-    customer_id: str = Field(..., min_length=1, description="Customer identifier")
-    amount: float = Field(..., gt=0, description="Loan amount must be positive")
-    type: LoanType = Field(..., description="Transaction type")
-    description: Optional[str] = Field(None, max_length=500)
+    account_id: str = Field(..., min_length=1, description="Account identifier", examples=["acc_demo_001"])
+    customer_id: str = Field(..., min_length=1, description="Customer identifier", examples=["cust_demo_001"])
+    amount: float = Field(..., gt=0, description="Loan amount must be positive", examples=[25000.00])
+    type: LoanType = Field(..., description="Transaction type", examples=["deposit"])
+    description: Optional[str] = Field(None, max_length=500, examples=["Small business loan application"])
 
     @field_validator("amount")
     @classmethod
@@ -45,7 +45,7 @@ class LoanApplicationResponse(BaseModel):
 
 
 class LoanStatusUpdate(BaseModel):
-    status: LoanStatus = Field(..., description="New loan status")
+    status: LoanStatus = Field(..., description="New loan status", examples=["approved"])
 
     @field_validator("status")
     @classmethod

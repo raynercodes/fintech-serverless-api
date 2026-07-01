@@ -22,13 +22,15 @@ Serverless fintech API built on AWS Lambda, DynamoDB, and SQS FIFO — modeled a
 
 ## 🚀 Quick Start — Test in 30 Seconds
 
-**Step 1:** Hit `POST /auth/demo` — no registration needed, returns a JWT instantly
+**Step 1:** Execute `POST /auth/demo` — no registration needed, returns a JWT instantly
 
-**Step 2:** Copy the `access_token` from the response
+**Step 2:** Scroll down and copy the `access_token` from the 201 response
 
 **Step 3:** Click the **Authorize** button above, paste the token, click **Authorize**
 
-**Step 4:** Test any endpoint — submit a loan application, check its status, query by account
+**Step 4:** Test any endpoint — submit a loan application, check its status, query by account — routes have specified examples and instructions for each endpoint
+
+**Step 5:** Scroll down to read each endpoint's response as this is where your metadata is returned — transaction IDs, timestamps, and status updates are all included in the response
 
 ---
 
