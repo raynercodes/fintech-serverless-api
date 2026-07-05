@@ -41,11 +41,15 @@ Create a new user account.
 
 **Password requirements:**
 - Minimum 8 characters
-- At least one uppercase letter
-- At least one number
+- At least one uppercase letter (A - Z)
+— At least one lowercase letter (a - z)
+- At least one number (1 - 9)
+— At least one special character (e.g., !@#$%^&*)
 
 **Demo account for testing:**
 Use `demo@fintech.raynercodes.dev` / `Demo1234!` to get a JWT token via `/auth/login`.
+
+**Note:** You can always refer back to the Steps at the top of the page when needed.
     """
 )
 async def register(request: UserRegisterRequest):
@@ -109,6 +113,8 @@ Token expires in **15 minutes**.
 3. Paste the token in the `Value` field
 4. Click **Authorize** then **Close**
 5. All protected endpoints will now include your token automatically
+
+**Note:** You can always refer back to the Steps at the top of the page when needed.
     """
 )
 async def login(request: UserLoginRequest):
@@ -174,6 +180,8 @@ Returns a JWT token for the demo account — no registration required.
 Use this to instantly test all protected endpoints from the Swagger UI.
 
 **This endpoint is for employer and reviewer testing only.**
+
+**Note:** You can always refer back to the Steps at the top of the page when needed.
     """
 )
 async def demo_login():

@@ -22,15 +22,19 @@ Serverless fintech API built on AWS Lambda, DynamoDB, and SQS FIFO — modeled a
 
 ## 🚀 Quick Start — Test in 30 Seconds
 
-**Step 1:** Execute `POST /auth/demo` — no registration needed, returns a JWT instantly
+Note: Always refer back to the Steps at the top of the page when stuck.
 
-**Step 2:** Scroll down and copy the `access_token` from the 201 response
+**Step 1:** Scroll down and click on `POST /auth/demo` once your there **click** `Try it out` then **click** `Execute` — no registration needed, returns a JWT instantly
 
-**Step 3:** Click the **Authorize** button above, paste the token, click **Authorize**
+**Step 2:** Scroll down and copy the `access_token` from the HTTP 200 response — only copy the value inside the quotes, not the quotes themselves
 
-**Step 4:** Test any endpoint — submit a loan application, check its status, query by account — routes have specified examples and instructions for each endpoint
+**Step 3:** Click the **Authorize** button above, paste the token, click **Authorize** — Should be a lock right beside the words "Authorize" Click that one.
 
-**Step 5:** Scroll down to read each endpoint's response as this is where your metadata is returned — transaction IDs, timestamps, and status updates are all included in the response
+**Step 4:** Click the x button. Do not click the "Logout" button — that will remove your token and you'll have to repeat Step 1 again. — If you don't see the logout button refer to step 3 and click the authorize button once the token is pasted
+
+**Step 5:** Test any endpoint — submit a loan application, check its status, query by account — routes have specified examples and instructions for each endpoint
+
+**Disclaimer:** Scroll down to read each endpoint's response as this is where your metadata is returned — transaction IDs, timestamps, and status updates are all included in the response
 
 ---
 

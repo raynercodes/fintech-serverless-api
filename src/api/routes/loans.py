@@ -36,6 +36,17 @@ def get_table():
         _table = get_transactions_table()
     return _table
 
+VALID_TRANSITIONS = {
+    "pending":   {"review", "approved", "rejected"},  # normally the worker does this automatically,
+                                                          # but a human can still intervene manually if needed
+    "review":    {"approved", "rejected"},               # a human MUST decide — no skipping to funded/repaid directly
+    "approved":  {"funded", "repaid", "defaulted"},       # a human can only update an approved loan to funded/repaid/defaulted 
+                                                        # no going back to review/rejected/pending
+    "rejected":  set(),   # FINAL — empty set means nothing can ever leave this state
+    "funded":    {"repaid", "defaulted"},                # a funded loan can still get repaid or default later
+    "repaid":    set(),   # FINAL
+    "defaulted": set(),   # FINAL
+}
 
 @router.post(
         "/",
@@ -54,6 +65,8 @@ Submit a new loan application for processing.
 4. Use that `transaction_id` in `GET /loans/{loan_id}` to check your loan status
 
 Processing is async — status starts as `pending` and updates to `funded` within a few seconds once the worker processes it via SQS FIFO.
+
+**Note:** You can always refer back to the Steps at the top of the page when needed.
     """,
         dependencies=[Depends(bearer_scheme)]
 )
@@ -69,6 +82,7 @@ async def submit_loan_application(request: LoanApplicationRequest, req: Request)
         "customer_id": request.customer_id,
         "amount": float(request.amount),
         "type": request.type.value,
+        "credit_score": request.credit_score,
         "timestamp": timestamp,
         "description": request.description or ""
     }
@@ -136,6 +150,8 @@ Retrieve a loan application by its ID.
 The `loan_id` is the same value as `transaction_id` — it's your unique loan reference number.
 
 **Status lifecycle:** `pending` → `funded` (allow a few seconds for async processing)
+
+**Note:** You can always refer back to the Steps at the top of the page when needed.
     """,
         dependencies=[Depends(bearer_scheme)]
 )
@@ -200,6 +216,8 @@ Retrieve all loan transactions for a specific account.
 4. If using your own customer account, enter your `account_id` from the login response and click **Execute**
 
 Returns all transactions associated with that account ordered by timestamp.
+
+**Note:** You can always refer back to the Steps at the top of the page when needed.
     """,
         dependencies=[Depends(bearer_scheme)]
 )
@@ -254,6 +272,8 @@ Retrieve all loan transactions across all accounts for a specific customer.
 4. If using your own customer account, enter your `customer_id` from the login response and click **Execute**
 
 A customer can have multiple accounts — this endpoint returns transactions across all of them via GSI 2.
+
+**Note:** You can always refer back to the Steps at the top of the page when needed.
     """,
         dependencies=[Depends(bearer_scheme)]
 )
@@ -298,17 +318,25 @@ async def get_loans_by_customer(customer_id: str):
         response_model=LoanApplicationResponse,
         summary="Update Loan Status",
         description="""
-Update the status of a pending loan application.
+Update the status of a loan application, following the loan lifecycle rules.
 
-Note: Only `pending` loans can be updated — this prevents race conditions where two requests try to update the same loan simultaneously.
-      Must be registered, logged in, and authorized to update a loan status.
+**Valid transitions:**
+- `pending` -> `review`, `approved`, `rejected`
+- `review` -> `approved`, `rejected`
+- `approved` -> `funded`, `repaid`, `defaulted`
+- `funded` -> `repaid`, `defaulted`
+- `rejected`, `repaid`, `defaulted` are FINAL — cannot be changed once reached
+
+**Note:** Must be registered, logged in, and authorized to update a loan status.
 
 **Instructions:**
 1. Submit a loan via `POST /loans/` and copy the `transaction_id` (returned in the response) — this is your **loan ID**
 2. Click **Try it out**
 3. Paste the `transaction_id` into the `loan_id` field
-4. Set status to `approved`, `funded`, `repaid`, or `defaulted`
+4. Set a status that's a valid next step for the loan's current state (Refer to the Valid transitions above)
 5. Click **Execute**
+
+**Note:** You can always refer back to the Steps at the top of the page when needed.
     """,
         dependencies=[Depends(bearer_scheme)]
 )
@@ -332,6 +360,19 @@ async def update_loan_status(loan_id: str, status_update: LoanStatusUpdate):
     item = items[0]
     account_id = item["account_id"]
     sort_key = item["timestamp_transaction_id"]
+    current_status = item["status"]
+    requested_status = status_update.status.value
+
+    # requested_status isn't in that allowed set, we reject it here in
+    # Python — before ever making a call to DynamoDB.
+    # Fallback to none or allowed_next_states if current_status has or doesn't have a valid next status (Prevents KeyError)
+    allowed_next_states = VALID_TRANSITIONS.get(current_status, set())
+    if requested_status not in allowed_next_states:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot move loan from '{current_status}' to '{requested_status}'. "
+                   f"Valid next states from '{current_status}': {sorted(allowed_next_states) or 'none (final state)'}"
+        )
 
     # Conditional update — status must be pending to allow transition
     # Prevents race conditions when two Lambda instances hit the same item
@@ -342,18 +383,20 @@ async def update_loan_status(loan_id: str, status_update: LoanStatusUpdate):
                 "timestamp_transaction_id": sort_key
             },
             UpdateExpression="SET #s = :new_status",
-            ConditionExpression="#s = :pending",
+            ConditionExpression="#s = :current_status",
             ExpressionAttributeNames={"#s": "status"},
             ExpressionAttributeValues={
                 ":new_status": status_update.status.value,
-                ":pending": "pending"
+                ":current_status": current_status
             },
             ReturnValues="ALL_NEW"
         )
     except table.meta.client.exceptions.ConditionalCheckFailedException:
+        # This now specifically means: someone else changed this loan's
+        # status between our query above and this update is a genuine race condition.
         raise HTTPException(
             status_code=409,
-            detail="Loan is no longer in pending status"
+            detail="Loan status changed by another request — please refresh and try again"
         )
 
     # Invalidate cache — status changed, cached data is stale

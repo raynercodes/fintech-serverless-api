@@ -54,6 +54,8 @@ Submit a new loan application for processing.
 4. Use that `transaction_id` in `GET /loans/{loan_id}` to check your loan status
 
 Processing is async — status starts as `pending` and updates to `funded` within a few seconds once the worker processes it via SQS FIFO.
+
+**Note:** You can always refer back to the Steps at the top of the page when needed.
     """,
         dependencies=[Depends(bearer_scheme)]
 )
@@ -136,6 +138,8 @@ Retrieve a loan application by its ID.
 The `loan_id` is the same value as `transaction_id` — it's your unique loan reference number.
 
 **Status lifecycle:** `pending` → `funded` (allow a few seconds for async processing)
+
+**Note:** You can always refer back to the Steps at the top of the page when needed.
     """,
         dependencies=[Depends(bearer_scheme)]
 )
@@ -200,6 +204,8 @@ Retrieve all loan transactions for a specific account.
 4. If using your own customer account, enter your `account_id` from the login response and click **Execute**
 
 Returns all transactions associated with that account ordered by timestamp.
+
+**Note:** You can always refer back to the Steps at the top of the page when needed.
     """,
         dependencies=[Depends(bearer_scheme)]
 )
@@ -254,6 +260,8 @@ Retrieve all loan transactions across all accounts for a specific customer.
 4. If using your own customer account, enter your `customer_id` from the login response and click **Execute**
 
 A customer can have multiple accounts — this endpoint returns transactions across all of them via GSI 2.
+
+**Note:** You can always refer back to the Steps at the top of the page when needed.
     """,
         dependencies=[Depends(bearer_scheme)]
 )
@@ -300,7 +308,7 @@ async def get_loans_by_customer(customer_id: str):
         description="""
 Update the status of a pending loan application.
 
-Note: Only `pending` loans can be updated — this prevents race conditions where two requests try to update the same loan simultaneously.
+**Note:** Only `pending` loans can be updated — this prevents race conditions where two requests try to update the same loan simultaneously.
       Must be registered, logged in, and authorized to update a loan status.
 
 **Instructions:**
@@ -309,6 +317,8 @@ Note: Only `pending` loans can be updated — this prevents race conditions wher
 3. Paste the `transaction_id` into the `loan_id` field
 4. Set status to `approved`, `funded`, `repaid`, or `defaulted`
 5. Click **Execute**
+
+**Note:** You can always refer back to the Steps at the top of the page when needed.
     """,
         dependencies=[Depends(bearer_scheme)]
 )

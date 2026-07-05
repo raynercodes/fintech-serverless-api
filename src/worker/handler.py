@@ -49,6 +49,9 @@ def process_single(table, transaction_data: dict):
     transaction_id = transaction_data["transaction_id"]
     account_id = transaction_data["account_id"]
     timestamp = transaction_data["timestamp"]
+    credit_score = transaction_data["credit_score"]
+
+    loan_status = determine_loan_status(credit_score)
 
     # Conditional write — attribute_not_exists prevents duplicate processing
     # Second layer of duplicate prevention after SQS FIFO deduplication
@@ -62,7 +65,8 @@ def process_single(table, transaction_data: dict):
                 "customer_id": transaction_data["customer_id"],
                 "timestamp": timestamp,
                 "amount": str(transaction_data["amount"]),
-                "status": "funded",
+                "credit_score": credit_score,  # stored for audit trail / underwriting history
+                "status": loan_status,
                 "type": transaction_data["type"],
                 "description": transaction_data.get("description", ""),
             },
@@ -80,6 +84,8 @@ def process_single(table, transaction_data: dict):
 
 
 def process_transfer(table, transaction_data: dict):
+    # scoring doesn't apply here. If you tried to run determine_loan_status()
+    # on a transfer, there'd be no credit_score in the message anyway since
     transaction_id = transaction_data["transaction_id"]
     source_account = transaction_data["account_id"]
     target_account = transaction_data["target_account_id"]
@@ -136,3 +142,16 @@ def process_transfer(table, transaction_data: dict):
     except Exception as e:
         print(f"Transfer failed — transaction rolled back: {transaction_id} — {str(e)}")
         raise
+
+def determine_loan_status(credit_score: int) -> str:
+    # Credit-based loan tier routing.
+    # >=650: auto-approved (FICO "Good" tier and above)
+    # >=500: routed to human review (gray zone, needs judgment)
+    # <500:  auto-rejected (deep subprime)
+    
+    if credit_score >= 650:
+        return "approved"
+    elif credit_score >= 500:
+        return "review"
+    else:
+        return "rejected"

@@ -12,7 +12,9 @@ class LoanType(str, Enum):
 
 class LoanStatus(str, Enum):
     pending = "pending"
+    review = "review"        # credit score 500-649
     approved = "approved"
+    rejected = "rejected"    # credit score < 500
     funded = "funded"
     repaid = "repaid"
     defaulted = "defaulted"
@@ -22,6 +24,8 @@ class LoanApplicationRequest(BaseModel):
     account_id: str = Field(..., min_length=1, description="Account identifier", examples=["acc_demo_001"])
     customer_id: str = Field(..., min_length=1, description="Customer identifier", examples=["cust_demo_001"])
     amount: float = Field(..., gt=0, description="Loan amount must be positive", examples=[25000.00])
+    # ge=300, le=850 enforces the real FICO score range at the door.
+    credit_score: int = Field(..., ge=300, le=850, description="Applicant credit score (FICO scale)", examples=[680])
     type: LoanType = Field(..., description="Transaction type", examples=["deposit"])
     description: Optional[str] = Field(None, max_length=500, examples=["Small business loan application"])
 
@@ -45,12 +49,6 @@ class LoanApplicationResponse(BaseModel):
 
 
 class LoanStatusUpdate(BaseModel):
+    # Pydantic's job here is just confirming `status` is a syntactically real LoanStatus value
+    # which `status: LoanStatus` already guarantees on its own.
     status: LoanStatus = Field(..., description="New loan status", examples=["approved"])
-
-    @field_validator("status")
-    @classmethod
-    def validate_transition(cls, v):
-        allowed = {LoanStatus.approved, LoanStatus.funded, LoanStatus.repaid, LoanStatus.defaulted}
-        if v not in allowed:
-            raise ValueError(f"Invalid status transition: {v}")
-        return v

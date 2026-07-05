@@ -1,9 +1,21 @@
 from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 import os
+import json
+
+class PrettyJSONResponse(JSONResponse):
+    def render(self, content) -> bytes:
+        return json.dumps(
+            content,
+            ensure_ascii=False,
+            allow_nan=False,
+            indent=2,
+            separators=(", ", ": ")
+        ).encode("utf-8")
 
 router = APIRouter()
 
-@router.get("/health", tags=["health"])
+@router.get("/health", tags=["health"], response_class=PrettyJSONResponse)
 def health_check():
     return {
         "status": "healthy",
@@ -37,9 +49,8 @@ def health_check():
         },
         "instructions": {
             "step_1": "GET /dev/health — you are here",
-            "step_2": "POST /dev/auth/demo — get a JWT token instantly, no registration needed",
-            "step_3": "Click Authorize in /dev/docs and paste the access_token",
-            "step_4": "Test any protected endpoint — submit a loan, check status, query by account",
-            "docs": "https://pw4kfpuw3f.execute-api.us-east-1.amazonaws.com/dev/docs"
+            "step_2": "copy the link below and paste it into your browser to access the interactive docs to test endpoints in a sandbox UI",
+            "docs": "https://pw4kfpuw3f.execute-api.us-east-1.amazonaws.com/dev/docs",
+            "Disclaimer": "Docs have examples and instructions for each endpoint — always refer back to the Steps at the top of the page when stuck — Thanks for testing!"
         }
     }
