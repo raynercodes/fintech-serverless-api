@@ -14,27 +14,13 @@ from src.api.models.loan import (
 )
 from src.api.core.database import get_transactions_table
 from src.api.core.cache import cache_get, cache_set, cache_delete
+from src.api.core.idempotency import compute_content_hash, claim_duplicate_check, get_duplicate_transaction_id
+from src.api.core import loans_repository # this imports the MODULE, not the functions directly
+from src.api.core.security import verify_jwt
 
 router = APIRouter()
 bearer_scheme = HTTPBearer()
 
-# Outside handler — L1 cached in execution context
-_sqs = None
-_table = None
-
-
-def get_sqs():
-    global _sqs
-    if _sqs is None:
-        _sqs = boto3.client("sqs", region_name="us-east-1")
-    return _sqs
-
-
-def get_table():
-    global _table
-    if _table is None:
-        _table = get_transactions_table()
-    return _table
 
 
 @router.post(
@@ -53,70 +39,26 @@ Submit a new loan application for processing.
 3. Copy the `transaction_id` from the response — this is your **loan ID**
 4. Use that `transaction_id` in `GET /loans/{loan_id}` to check your loan status
 
-Processing is async — status starts as `pending` and updates to `funded` within a few seconds once the worker processes it via SQS FIFO.
+Credit Score categories:
+ - 500-649 -> review (for human intervention)
+ - 650+ -> approved (Max FICO is 850)
+ - anything less than 500 is rejected (Min FICO is 300)
 
 **Note:** You can always refer back to the Steps at the top of the page when needed.
     """,
         dependencies=[Depends(bearer_scheme)]
 )
 async def submit_loan_application(request: LoanApplicationRequest, req: Request):
-    transaction_id = str(uuid.uuid4())
-    timestamp = datetime.now(timezone.utc).isoformat()
+    # Same identity-extraction pattern as update_loan_status — API Gateway's
+    # Lambda Authorizer already confirmed this token is VALID before we got
+    # here; this step is purely about knowing WHO it belongs to, so we can
+    # record it in the audit vault.
+    auth_header = req.headers.get("Authorization", "")
+    token = auth_header.replace("Bearer ", "")
+    payload = verify_jwt(token)
+    actor = payload["account_id"] if payload else "unknown"
 
-    # Build the message that goes to SQS
-    # This is the contract the worker Lambda expects
-    message = {
-        "transaction_id": transaction_id,
-        "account_id": request.account_id,
-        "customer_id": request.customer_id,
-        "amount": float(request.amount),
-        "type": request.type.value,
-        "timestamp": timestamp,
-        "description": request.description or ""
-    }
-
-    if request.type.value == "transfer":
-        target_account = getattr(request, "target_account_id", None)
-        if not target_account:
-            raise HTTPException(
-                status_code=400,
-                detail="target_account_id is required for transfers"
-            )
-        message["target_account_id"] = target_account
-
-    # Push to SQS FIFO — async processing
-    # API never blocks waiting for DynamoDB write
-    # Same pattern as Celery in my Content Moderation API
-    try:
-        sqs = get_sqs()
-        sqs.send_message(
-            QueueUrl=os.environ["SQS_QUEUE_URL"],
-            MessageBody=json.dumps(message),
-            # MessageGroupId ensures FIFO ordering per account
-            MessageGroupId=request.account_id,
-            # MessageDeduplicationId prevents duplicate messages
-            # First layer of duplicate prevention — SQS FIFO level
-            MessageDeduplicationId=transaction_id
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=503,
-            detail="unavailable to proccess request"
-        )
-
-    # Return pending status instantly — worker handles the actual write
-    # GSI eventual consistency handled by returning full data here
-    # Client has the transaction_id to poll for status updates
-    return LoanApplicationResponse(
-        transaction_id=transaction_id,
-        account_id=request.account_id,
-        customer_id=request.customer_id,
-        amount=request.amount,
-        type=request.type,
-        status=LoanStatus.pending,
-        timestamp=timestamp,
-        description=request.description
-    )
+    return await loans_repository.submit_loan_application(request, actor)
 
 
 @router.get(
@@ -149,44 +91,8 @@ async def get_loan(
         description="The transaction_id returned from POST /loans/",
         examples=["YOUR_TRANSACTION_ID"]
     )
-):
-    # L1/L2 cache check first
-    cache_key = f"loan:{loan_id}"
-    cached = cache_get(cache_key)
-    if cached:
-        return LoanApplicationResponse(**cached)
-
-    # Cache miss — query GSI 1 (transaction-id-index)
-    # This is the GET /loans/{loan_id} access pattern
-    table = get_table()
-    try:
-        result = table.query(
-            IndexName="transaction-id-index",
-            KeyConditionExpression=Key("transaction_id").eq(loan_id)
-        )
-    except Exception:
-        raise HTTPException(status_code=503, detail="Database unavailable")
-
-    items = result.get("Items", [])
-    if not items:
-        raise HTTPException(status_code=404, detail="Loan not found")
-
-    item = items[0]
-
-    response = LoanApplicationResponse(
-        transaction_id=item["transaction_id"],
-        account_id=item["account_id"],
-        customer_id=item["customer_id"],
-        amount=float(item["amount"]),
-        type=item["type"],
-        status=item["status"],
-        timestamp=item["timestamp"],
-        description=item.get("description")
-    )
-
-    # Store in cache — 5 minute TTL
-    cache_set(cache_key, response.model_dump(), ttl_seconds=300)
-    return response
+): 
+    return await loans_repository.get_loan(loan_id)
 
 
 @router.get(
@@ -210,39 +116,7 @@ Returns all transactions associated with that account ordered by timestamp.
         dependencies=[Depends(bearer_scheme)]
 )
 async def get_loans_by_account(account_id: str):
-    # L1/L2 cache check first
-    cache_key = f"account:{account_id}:transactions"
-    cached = cache_get(cache_key)
-    if cached:
-        return cached
-
-    # Cache miss — query main table directly by partition key
-    # No GSI needed — account_id IS the partition key
-    table = get_table()
-    try:
-        result = table.query(
-            KeyConditionExpression=Key("account_id").eq(account_id)
-        )
-    except Exception:
-        raise HTTPException(status_code=503, detail="Database unavailable")
-
-    items = result.get("Items", [])
-    response = [
-        {
-            "transaction_id": item["transaction_id"],
-            "account_id": item["account_id"],
-            "amount": float(item["amount"]),
-            "type": item["type"],
-            "status": item["status"],
-            "timestamp": item["timestamp"],
-        }
-        for item in items
-    ]
-
-    # Cache the result — 30 second TTL
-    # Short TTL because new transactions invalidate this list
-    cache_set(cache_key, response, ttl_seconds=30)
-    return response
+    return await loans_repository.get_loans_by_account(account_id)
 
 
 @router.get(
@@ -266,39 +140,7 @@ A customer can have multiple accounts — this endpoint returns transactions acr
         dependencies=[Depends(bearer_scheme)]
 )
 async def get_loans_by_customer(customer_id: str):
-    # L1/L2 cache check first
-    cache_key = f"customer:{customer_id}:transactions"
-    cached = cache_get(cache_key)
-    if cached:
-        return cached
-
-    # Cache miss — query GSI 2 (customer-id-index)
-    # This is the GET /loans/customer/{customer_id} access pattern
-    table = get_table()
-    try:
-        result = table.query(
-            IndexName="customer-id-index",
-            KeyConditionExpression=Key("customer_id").eq(customer_id)
-        )
-    except Exception:
-        raise HTTPException(status_code=503, detail="Database unavailable")
-
-    items = result.get("Items", [])
-    response = [
-        {
-            "transaction_id": item["transaction_id"],
-            "account_id": item["account_id"],
-            "customer_id": item["customer_id"],
-            "amount": float(item["amount"]),
-            "type": item["type"],
-            "status": item["status"],
-            "timestamp": item["timestamp"],
-        }
-        for item in items
-    ]
-
-    cache_set(cache_key, response, ttl_seconds=30)
-    return response
+    return await loans_repository.get_loans_by_customer(customer_id)
 
 
 @router.patch(
@@ -306,78 +148,31 @@ async def get_loans_by_customer(customer_id: str):
         response_model=LoanApplicationResponse,
         summary="Update Loan Status",
         description="""
-Update the status of a pending loan application.
+Update the status of a loan application, following the loan lifecycle rules.
 
-**Note:** Only `pending` loans can be updated — this prevents race conditions where two requests try to update the same loan simultaneously.
-      Must be registered, logged in, and authorized to update a loan status.
+**Valid transitions:**
+- `pending` -> `review`, `approved`, `rejected` use-case is only if the worker is unable to process the loan automatically — a human can intervene and move it forward manually
+- `review` -> `approved`, `rejected` these are updates that can only happen if the score is in the gray zone (500-649). If your loan is in review refer to these updates to move it forward.
+- `approved` -> `funded`, `repaid`, `defaulted` these are updates that can happen once a human (you) has approved the loan — unless the credit score is high enough to auto-approve
+- `funded` -> `repaid`, `defaulted` these are updates that can happen once a human (you) has approved and funded the loan
+- `rejected`, `repaid`, `defaulted` are FINAL — cannot be changed once reached
+
+**Note:** Must be registered, logged in, and authorized to update a loan status.
 
 **Instructions:**
 1. Submit a loan via `POST /loans/` and copy the `transaction_id` (returned in the response) — this is your **loan ID**
 2. Click **Try it out**
 3. Paste the `transaction_id` into the `loan_id` field
-4. Set status to `approved`, `funded`, `repaid`, or `defaulted`
+4. Set a status that's a valid next step for the loan's current state (Refer to the Valid transitions above)
 5. Click **Execute**
 
 **Note:** You can always refer back to the Steps at the top of the page when needed.
     """,
         dependencies=[Depends(bearer_scheme)]
 )
-async def update_loan_status(loan_id: str, status_update: LoanStatusUpdate):
-    table = get_table()
-
-    # First fetch the item to get account_id and sort key
-    # GSI 1 doesn't support updates directly — need main table keys
-    try:
-        result = table.query(
-            IndexName="transaction-id-index",
-            KeyConditionExpression=Key("transaction_id").eq(loan_id)
-        )
-    except Exception:
-        raise HTTPException(status_code=503, detail="Database unavailable")
-
-    items = result.get("Items", [])
-    if not items:
-        raise HTTPException(status_code=404, detail="Loan not found")
-
-    item = items[0]
-    account_id = item["account_id"]
-    sort_key = item["timestamp_transaction_id"]
-
-    # Conditional update — status must be pending to allow transition
-    # Prevents race conditions when two Lambda instances hit the same item
-    try:
-        result = table.update_item(
-            Key={
-                "account_id": account_id,
-                "timestamp_transaction_id": sort_key
-            },
-            UpdateExpression="SET #s = :new_status",
-            ConditionExpression="#s = :pending",
-            ExpressionAttributeNames={"#s": "status"},
-            ExpressionAttributeValues={
-                ":new_status": status_update.status.value,
-                ":pending": "pending"
-            },
-            ReturnValues="ALL_NEW"
-        )
-    except table.meta.client.exceptions.ConditionalCheckFailedException:
-        raise HTTPException(
-            status_code=409,
-            detail="Loan is no longer in pending status"
-        )
-
-    # Invalidate cache — status changed, cached data is stale
-    cache_delete(f"loan:{loan_id}")
-    cache_delete(f"account:{account_id}:transactions")
-
-    updated = result["Attributes"]
-    return LoanApplicationResponse(
-        transaction_id=updated["transaction_id"],
-        account_id=updated["account_id"],
-        customer_id=updated["customer_id"],
-        amount=float(updated["amount"]),
-        type=updated["type"],
-        status=updated["status"],
-        timestamp=updated["timestamp"],
-        description=updated.get("description")
-    )
+async def update_loan_status(loan_id: str, status_update: LoanStatusUpdate, req: Request):
+    auth_header = req.headers.get("Authorization", "")
+    token = auth_header.replace("Bearer ", "")
+    payload = verify_jwt(token)
+    actor = payload["account_id"] if payload else "unknown"
+    return await loans_repository.update_loan_status(loan_id, status_update.status.value, actor)

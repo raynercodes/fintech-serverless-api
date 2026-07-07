@@ -1,0 +1,741 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Fintech Serverless Loan Lending Platform
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+    - dev
+    - staging
+    - prod
+  JwtKmsKeyArn:
+    Type: String
+    Description: ARN of the CMK protecting the JWT secret
+  EncryptionKmsKeyArn:
+    Type: String
+    Description: ARN of the CMK protecting the AES-256-GCM encryption key
+  PasswordPepperKmsKeyArn:
+    Type: String
+    Description: ARN of the CMK protecting the password pepper
+  DynamoDbKmsKeyArn:
+    Type: String
+    Description: ARN of the CMK for DynamoDB encryption at rest
+  AuditLogKmsKeyArn:
+    Type: String
+    Description: ARN of the CMK protecting the S3 compliance vault
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 30
+    MemorySize: 256
+    Environment:
+      Variables:
+        ENVIRONMENT:
+          Ref: Environment
+        DYNAMODB_TABLE_NAME:
+          Ref: FintechTransactionsTable
+        CACHE_TABLE_NAME:
+          Ref: FintechCacheTable
+        USERS_TABLE_NAME:
+          Ref: FintechUsersTable
+        SQS_QUEUE_URL:
+          Ref: FintechTransactionQueue
+        FUNCTION_NAME:
+          Fn::Sub: fintech-api-${Environment}
+        AUDIT_LOG_BUCKET_NAME:
+          Ref: FintechAuditLogBucket
+        APP_VERSION: 1.0.0
+Resources:
+  FintechApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName:
+        Fn::Sub: /aws/lambda/fintech-api-${Environment}
+      RetentionInDays: 14
+    Metadata:
+      SamResourceId: FintechApiLogGroup
+  FintechAuthorizerLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName:
+        Fn::Sub: /aws/lambda/fintech-authorizer-${Environment}
+      RetentionInDays: 14
+    Metadata:
+      SamResourceId: FintechAuthorizerLogGroup
+  FintechWorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName:
+        Fn::Sub: /aws/lambda/fintech-worker-${Environment}
+      RetentionInDays: 14
+    Metadata:
+      SamResourceId: FintechWorkerLogGroup
+  FintechValidateDeploymentLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName:
+        Fn::Sub: /aws/lambda/fintech-validate-deployment-${Environment}
+      RetentionInDays: 14
+    Metadata:
+      SamResourceId: FintechValidateDeploymentLogGroup
+  FintechValidateProductionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName:
+        Fn::Sub: /aws/lambda/fintech-validate-production-${Environment}
+      RetentionInDays: 14
+    Metadata:
+      SamResourceId: FintechValidateProductionLogGroup
+  FintechTransactionDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName:
+        Fn::Sub: fintech-transactions-dlq-${Environment}.fifo
+      FifoQueue: true
+      MessageRetentionPeriod: 1209600
+      Tags:
+      - Key: Project
+        Value: fintech-serverless
+      - Key: Environment
+        Value:
+          Ref: Environment
+    Metadata:
+      SamResourceId: FintechTransactionDLQ
+  FintechTransactionQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName:
+        Fn::Sub: fintech-transactions-${Environment}.fifo
+      FifoQueue: true
+      ContentBasedDeduplication: false
+      VisibilityTimeout: 60
+      ReceiveMessageWaitTimeSeconds: 20
+      RedrivePolicy:
+        deadLetterTargetArn:
+          Fn::GetAtt:
+          - FintechTransactionDLQ
+          - Arn
+        maxReceiveCount: 3
+      Tags:
+      - Key: Project
+        Value: fintech-serverless
+      - Key: Environment
+        Value:
+          Ref: Environment
+    Metadata:
+      SamResourceId: FintechTransactionQueue
+  FintechDependenciesLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName:
+        Fn::Sub: fintech-dependencies-${Environment}
+      Description: Shared dependencies for fintech Lambda functions
+      ContentUri: s3://fintech-serverless-artifacts-dev/0848edf60fe51f1de42f2fb27f153595
+      CompatibleRuntimes:
+      - python3.12
+      RetentionPolicy: Delete
+    Metadata:
+      SamResourceId: FintechDependenciesLayer
+  FintechLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: fintech-lambda-role-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+      Policies:
+      - PolicyName: FintechLambdaPolicy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:UpdateItem
+            - dynamodb:DeleteItem
+            - dynamodb:Query
+            - dynamodb:DescribeTable
+            - dynamodb:TransactWriteItems
+            Resource:
+            - Fn::GetAtt:
+              - FintechTransactionsTable
+              - Arn
+            - Fn::Sub: ${FintechTransactionsTable.Arn}/index/*
+            - Fn::GetAtt:
+              - FintechCacheTable
+              - Arn
+            - Fn::GetAtt:
+              - FintechUsersTable
+              - Arn
+          - Effect: Allow
+            Action:
+            - sqs:SendMessage
+            - sqs:ReceiveMessage
+            - sqs:DeleteMessage
+            - sqs:GetQueueAttributes
+            Resource:
+              Fn::GetAtt:
+              - FintechTransactionQueue
+              - Arn
+          - Effect: Allow
+            Action:
+            - secretsmanager:GetSecretValue
+            - secretsmanager:DescribeSecret
+            Resource:
+              Fn::Sub: arn:aws:secretsmanager:us-east-1:${AWS::AccountId}:secret:/fintech/*
+          - Effect: Allow
+            Action:
+            - kms:Decrypt
+            - kms:GenerateDataKey
+            Resource: '*'
+          - Effect: Allow
+            Action:
+            - codedeploy:PutLifecycleEventHookExecutionStatus
+            Resource: '*'
+          - Effect: Allow
+            Action:
+            - cloudwatch:GetMetricStatistics
+            Resource: '*'
+          - Effect: Allow
+            Action:
+            - s3:PutObject
+            - s3:GetObject
+            Resource:
+              Fn::Sub: ${FintechAuditLogBucket.Arn}/*
+          - Effect: Deny
+            Action:
+            - s3:DeleteObject
+            - s3:DeleteObjectVersion
+            - s3:PutLifecycleConfiguration
+            Resource:
+            - Fn::GetAtt:
+              - FintechAuditLogBucket
+              - Arn
+            - Fn::Sub: ${FintechAuditLogBucket.Arn}/*
+    Metadata:
+      SamResourceId: FintechLambdaRole
+  FintechCodeDeployServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: fintech-codedeploy-role-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: codedeploy.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AWSCodeDeployRoleForLambda
+      Policies:
+      - PolicyName: CodeDeployLambdaPolicy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - lambda:GetFunction
+            - lambda:GetFunctionConfiguration
+            - lambda:UpdateAlias
+            - lambda:ListVersionsByFunction
+            - lambda:InvokeFunction
+            - lambda:GetAlias
+            - lambda:UpdateFunctionCode
+            - lambda:PublishVersion
+            - codedeploy:*
+            - cloudwatch:DescribeAlarms
+            - sns:Publish
+            - iam:PassRole
+            Resource: '*'
+    Metadata:
+      SamResourceId: FintechCodeDeployServiceRole
+  FintechApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: fintech-api-${Environment}
+      Description: FastAPI + Mangum handler for loan application endpoints
+      CodeUri: s3://fintech-serverless-artifacts-dev/0848edf60fe51f1de42f2fb27f153595
+      Handler: src.api.main.handler
+      Role:
+        Fn::GetAtt:
+        - FintechLambdaRole
+        - Arn
+      Tracing: Active
+      AutoPublishAlias:
+        Ref: Environment
+      DeploymentPreference:
+        Type: AllAtOnce
+        Role:
+          Fn::GetAtt:
+          - FintechCodeDeployServiceRole
+          - Arn
+        Hooks:
+          PreTraffic:
+            Ref: FintechValidateDeploymentFunction
+          PostTraffic:
+            Ref: FintechValidateProductionFunction
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: FintechApi
+            Path: /{proxy+}
+            Method: ANY
+        HealthEvent:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: FintechApi
+            Path: /health
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        DocsEvent:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: FintechApi
+            Path: /docs
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        OpenApiEvent:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: FintechApi
+            Path: /openapi.json
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        DocsStaticEvent:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: FintechApi
+            Path: /docs/{asset}
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        AuthLoginEvent:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: FintechApi
+            Path: /auth/login
+            Method: POST
+            Auth:
+              Authorizer: NONE
+        AuthRegisterEvent:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: FintechApi
+            Path: /auth/register
+            Method: POST
+            Auth:
+              Authorizer: NONE
+        AuthDemoEvent:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: FintechApi
+            Path: /auth/demo
+            Method: POST
+            Auth:
+              Authorizer: NONE
+    Metadata:
+      SamResourceId: FintechApiFunction
+  FintechAuthorizerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: fintech-authorizer-${Environment}
+      Description: "Lambda Authorizer \u2014 JWT validation before main function invokes"
+      CodeUri: s3://fintech-serverless-artifacts-dev/0848edf60fe51f1de42f2fb27f153595
+      Handler: src.authorizer.handler.handler
+      Role:
+        Fn::GetAtt:
+        - FintechLambdaRole
+        - Arn
+      Tracing: Active
+    Metadata:
+      SamResourceId: FintechAuthorizerFunction
+  FintechWorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: fintech-worker-${Environment}
+      Description: "SQS FIFO worker \u2014 processes loan transactions asynchronously"
+      CodeUri: s3://fintech-serverless-artifacts-dev/0848edf60fe51f1de42f2fb27f153595
+      Handler: src.worker.handler.handler
+      Role:
+        Fn::GetAtt:
+        - FintechLambdaRole
+        - Arn
+      Tracing: Active
+      Events:
+        SQSEvent:
+          Type: SQS
+          Properties:
+            Queue:
+              Fn::GetAtt:
+              - FintechTransactionQueue
+              - Arn
+            BatchSize: 10
+            FunctionResponseTypes:
+            - ReportBatchItemFailures
+    Metadata:
+      SamResourceId: FintechWorkerFunction
+  FintechValidateDeploymentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: fintech-validate-deployment-${Environment}
+      Description: "CodeDeploy BeforeAllowTraffic hook \u2014 pre-deployment sanity\
+        \ check"
+      CodeUri: s3://fintech-serverless-artifacts-dev/0848edf60fe51f1de42f2fb27f153595
+      Handler: src.hooks.validate_deployment.handler
+      Role:
+        Fn::GetAtt:
+        - FintechLambdaRole
+        - Arn
+      Tracing: Active
+    Metadata:
+      SamResourceId: FintechValidateDeploymentFunction
+  FintechValidateProductionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: fintech-validate-production-${Environment}
+      Description: "CodeDeploy AfterAllowTraffic hook \u2014 canary window error monitoring"
+      CodeUri: s3://fintech-serverless-artifacts-dev/0848edf60fe51f1de42f2fb27f153595
+      Handler: src.hooks.validate_production.handler
+      Role:
+        Fn::GetAtt:
+        - FintechLambdaRole
+        - Arn
+      Tracing: Active
+    Metadata:
+      SamResourceId: FintechValidateProductionFunction
+  ValidateDeploymentPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName:
+        Fn::GetAtt:
+        - FintechValidateDeploymentFunction
+        - Arn
+      Action: lambda:InvokeFunction
+      Principal: codedeploy.amazonaws.com
+      SourceArn:
+        Fn::Sub: arn:aws:codedeploy:us-east-1:${AWS::AccountId}:deploymentgroup:*
+    Metadata:
+      SamResourceId: ValidateDeploymentPermission
+  ValidateProductionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName:
+        Fn::GetAtt:
+        - FintechValidateProductionFunction
+        - Arn
+      Action: lambda:InvokeFunction
+      Principal: codedeploy.amazonaws.com
+      SourceArn:
+        Fn::Sub: arn:aws:codedeploy:us-east-1:${AWS::AccountId}:deploymentgroup:*
+    Metadata:
+      SamResourceId: ValidateProductionPermission
+  FintechApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name:
+        Fn::Sub: fintech-api-${Environment}
+      StageName:
+        Ref: Environment
+      TracingEnabled: true
+      Auth:
+        DefaultAuthorizer: FintechAuthorizer
+        Authorizers:
+          FintechAuthorizer:
+            FunctionArn:
+              Fn::GetAtt:
+              - FintechAuthorizerFunction
+              - Arn
+            Identity:
+              Header: Authorization
+        ResourcePolicy:
+          CustomStatements:
+          - Effect: Allow
+            Principal: '*'
+            Action: execute-api:Invoke
+            Resource:
+            - Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/${Environment}/*
+      MethodSettings:
+      - ResourcePath: /*
+        HttpMethod: '*'
+        ThrottlingBurstLimit: 100
+        ThrottlingRateLimit: 50
+        LoggingLevel: INFO
+        DataTraceEnabled: false
+        MetricsEnabled: true
+    Metadata:
+      SamResourceId: FintechApi
+  FintechTransactionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName:
+        Fn::Sub: fintech-transactions-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId:
+          Ref: DynamoDbKmsKeyArn
+      AttributeDefinitions:
+      - AttributeName: account_id
+        AttributeType: S
+      - AttributeName: timestamp_transaction_id
+        AttributeType: S
+      - AttributeName: transaction_id
+        AttributeType: S
+      - AttributeName: customer_id
+        AttributeType: S
+      KeySchema:
+      - AttributeName: account_id
+        KeyType: HASH
+      - AttributeName: timestamp_transaction_id
+        KeyType: RANGE
+      GlobalSecondaryIndexes:
+      - IndexName: transaction-id-index
+        KeySchema:
+        - AttributeName: transaction_id
+          KeyType: HASH
+        Projection:
+          ProjectionType: ALL
+      - IndexName: customer-id-index
+        KeySchema:
+        - AttributeName: customer_id
+          KeyType: HASH
+        - AttributeName: timestamp_transaction_id
+          KeyType: RANGE
+        Projection:
+          ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+      Tags:
+      - Key: Project
+        Value: fintech-serverless
+      - Key: Environment
+        Value:
+          Ref: Environment
+    Metadata:
+      SamResourceId: FintechTransactionsTable
+  FintechUsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName:
+        Fn::Sub: fintech-users-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId:
+          Ref: DynamoDbKmsKeyArn
+      AttributeDefinitions:
+      - AttributeName: email
+        AttributeType: S
+      KeySchema:
+      - AttributeName: email
+        KeyType: HASH
+      Tags:
+      - Key: Project
+        Value: fintech-serverless
+      - Key: Environment
+        Value:
+          Ref: Environment
+    Metadata:
+      SamResourceId: FintechUsersTable
+  FintechCacheTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName:
+        Fn::Sub: fintech-cache-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId:
+          Ref: DynamoDbKmsKeyArn
+      AttributeDefinitions:
+      - AttributeName: cache_key
+        AttributeType: S
+      KeySchema:
+      - AttributeName: cache_key
+        KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+      Tags:
+      - Key: Project
+        Value: fintech-serverless
+      - Key: Environment
+        Value:
+          Ref: Environment
+    Metadata:
+      SamResourceId: FintechCacheTable
+  FintechAuditLogBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Sub: fintech-audit-log-${AWS::AccountId}-${Environment}
+      VersioningConfiguration:
+        Status: Enabled
+      ObjectLockEnabled: true
+      ObjectLockConfiguration:
+        ObjectLockEnabled: Enabled
+        Rule:
+          DefaultRetention:
+            Mode: COMPLIANCE
+            Years: 3
+      LifecycleConfiguration:
+        Rules:
+        - Id: TransitionToGlacierFlexibleRetrieval
+          Status: Enabled
+          Transitions:
+          - StorageClass: GLACIER
+            TransitionInDays: 60
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: aws:kms
+            KMSMasterKeyID:
+              Ref: AuditLogKmsKeyArn
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+      - Key: Project
+        Value: fintech-serverless
+      - Key: Environment
+        Value:
+          Ref: Environment
+    Metadata:
+      SamResourceId: FintechAuditLogBucket
+  AuditLogBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket:
+        Ref: FintechAuditLogBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: DenyDeleteEver
+          Effect: Deny
+          Principal: '*'
+          Action:
+          - s3:DeleteObject
+          - s3:DeleteObjectVersion
+          - s3:PutLifecycleConfiguration
+          Resource:
+            Fn::Sub: ${FintechAuditLogBucket.Arn}/*
+    Metadata:
+      SamResourceId: AuditLogBucketPolicy
+  BillingAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName:
+        Fn::Sub: fintech-billing-alarm-${Environment}
+      AlarmDescription: Alert when AWS charges exceed $10
+      MetricName: EstimatedCharges
+      Namespace: AWS/Billing
+      Statistic: Maximum
+      Period: 86400
+      EvaluationPeriods: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+      - Name: Currency
+        Value: USD
+    Metadata:
+      SamResourceId: BillingAlarm
+Outputs:
+  ApiUrl:
+    Value:
+      Fn::Sub: https://${FintechApi}.execute-api.us-east-1.amazonaws.com/${Environment}
+    Export:
+      Name:
+        Fn::Sub: fintech-api-url-${Environment}
+  ApiId:
+    Value:
+      Ref: FintechApi
+    Export:
+      Name:
+        Fn::Sub: fintech-api-id-${Environment}
+  TransactionsTableName:
+    Value:
+      Ref: FintechTransactionsTable
+    Export:
+      Name:
+        Fn::Sub: fintech-transactions-table-${Environment}
+  TransactionsTableArn:
+    Value:
+      Fn::GetAtt:
+      - FintechTransactionsTable
+      - Arn
+    Export:
+      Name:
+        Fn::Sub: fintech-transactions-table-arn-${Environment}
+  CacheTableName:
+    Value:
+      Ref: FintechCacheTable
+    Export:
+      Name:
+        Fn::Sub: fintech-cache-table-${Environment}
+  WorkerFunctionArn:
+    Value:
+      Fn::GetAtt:
+      - FintechWorkerFunction
+      - Arn
+    Export:
+      Name:
+        Fn::Sub: fintech-worker-arn-${Environment}
+  QueueUrl:
+    Value:
+      Ref: FintechTransactionQueue
+    Export:
+      Name:
+        Fn::Sub: fintech-queue-url-${Environment}
+  DLQUrl:
+    Value:
+      Ref: FintechTransactionDLQ
+    Export:
+      Name:
+        Fn::Sub: fintech-dlq-url-${Environment}
+  DLQArn:
+    Value:
+      Fn::GetAtt:
+      - FintechTransactionDLQ
+      - Arn
+    Export:
+      Name:
+        Fn::Sub: fintech-dlq-arn-${Environment}

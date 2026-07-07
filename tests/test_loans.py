@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from unittest.mock import patch
 from jose import jwt as jose_jwt
 import time
+
 from src.worker.handler import determine_loan_status, process_transaction
 
 TEST_JWT_SECRET = "test-secret-key-for-unit-tests-only"
@@ -19,6 +20,7 @@ os.environ["SQS_QUEUE_URL"] = "https://sqs.us-east-1.amazonaws.com/123456789/fin
 os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
 os.environ["AWS_ACCESS_KEY_ID"] = "testing"
 os.environ["AWS_SECRET_ACCESS_KEY"] = "testing"
+os.environ["AUDIT_LOG_BUCKET_NAME"] = "fintech-audit-log-test"
 
 from src.api.main import app
 
@@ -31,6 +33,64 @@ def aws_credentials():
     os.environ["AWS_SECRET_ACCESS_KEY"] = "testing"
     os.environ["AWS_SECURITY_TOKEN"] = "testing"
     os.environ["AWS_SESSION_TOKEN"] = "testing"
+
+
+@pytest.fixture
+def mock_jwt_secret():
+    """
+    Every route that calls verify_jwt() needs this to actually
+    decode tokens signed with TEST_JWT_SECRET. Without this patch,
+    get_jwt_secret() tries to hit REAL Secrets Manager, which doesn't
+    have this path in the mocked test account, and the call fails.
+    autouse=True means every single test gets this automatically —
+    no need to remember to add it individually to each test.
+    """
+    with patch("src.api.core.security.get_jwt_secret", return_value=TEST_JWT_SECRET):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def apply_jwt_mock(mock_jwt_secret):
+    """Ensures mock_jwt_secret is active for every test in this file automatically."""
+    pass
+
+
+@pytest.fixture
+def audit_log_bucket(aws_credentials):
+    """
+    Creates a mocked S3 bucket standing in for the real Compliance Vault.
+    Without this, write_audit_event() would try to reach a REAL S3
+    bucket that doesn't exist in the test account, and every route that
+    calls it (submit_loan_application, update_loan_status) or worker
+    path (process_single) would fail with a NoSuchBucket error
+
+    Yielding the s3 client itself (not just creating the bucket and
+    yielding nothing) lets tests directly inspect what got written —
+    real verification, not just "no exception was raised."
+    """
+    with mock_aws():
+        s3 = boto3.client("s3", region_name="us-east-1")
+        s3.create_bucket(Bucket=os.environ["AUDIT_LOG_BUCKET_NAME"])
+        yield s3
+
+
+# this is just a helper for the S3 audit log tests below — not a fixture, not a test itself
+def get_audit_events(s3_client, transaction_id: str) -> list:
+    """
+    Reads back every audit record written for a given transaction_id,
+    parsed from JSON. Lets tests assert on the ACTUAL content written
+    to the vault — event_type, actor, details — not just that S3
+    didn't throw an error.
+    """
+    result = s3_client.list_objects_v2(
+        Bucket=os.environ["AUDIT_LOG_BUCKET_NAME"],
+        Prefix=f"{transaction_id}/"
+    )
+    events = []
+    for obj in result.get("Contents", []):
+        body = s3_client.get_object(Bucket=os.environ["AUDIT_LOG_BUCKET_NAME"], Key=obj["Key"])
+        events.append(json.loads(body["Body"].read()))
+    return events
 
 
 @pytest.fixture
@@ -107,8 +167,8 @@ def auth_headers():
     return {"Authorization": f"Bearer {token}"}
 
 @mock_aws
-def test_submit_loan_application(dynamodb_tables, auth_headers):
-    with patch("src.api.routes.loans.get_sqs") as mock_sqs:
+def test_submit_loan_application(dynamodb_tables, audit_log_bucket, auth_headers):
+    with patch("src.api.core.loans_repository.get_sqs") as mock_sqs:
         mock_sqs.return_value.send_message.return_value = {
             "MessageId": "test-message-id"
         }
@@ -132,13 +192,17 @@ def test_submit_loan_application(dynamodb_tables, auth_headers):
         assert data["customer_id"] == "cust_001"
         assert data["amount"] == 5000.00
         assert data["status"] == "pending"
+        # real verification the audit vault actually got the event
+        events = get_audit_events(audit_log_bucket, data["transaction_id"])
+        assert len(events) == 1
+        assert events[0]["event_type"] == "loan_submitted"
         assert "transaction_id" in data
         assert "timestamp" in data
 
 
 @mock_aws
 def test_submit_loan_invalid_amount(dynamodb_tables, auth_headers):
-    with patch("src.api.routes.loans.get_sqs"):
+    with patch("src.api.core.loans_repository.get_sqs"):
         response = client.post(
             "/loans/",
             json={
@@ -155,7 +219,7 @@ def test_submit_loan_invalid_amount(dynamodb_tables, auth_headers):
 
 @mock_aws
 def test_submit_loan_invalid_type(dynamodb_tables, auth_headers):
-    with patch("src.api.routes.loans.get_sqs"):
+    with patch("src.api.core.loans_repository.get_sqs"):
         response = client.post(
             "/loans/",
             json={
@@ -199,7 +263,7 @@ def test_get_loans_by_customer_empty(dynamodb_tables, auth_headers):
 @mock_aws
 def test_submit_loan_credit_score_too_low(dynamodb_tables, auth_headers):
     """A score below 300 isn't a real FICO score — Pydantic should reject it."""
-    with patch("src.api.routes.loans.get_sqs"):
+    with patch("src.api.core.loans_repository.get_sqs"):
         response = client.post(
             "/loans/",
             json={
@@ -217,7 +281,7 @@ def test_submit_loan_credit_score_too_low(dynamodb_tables, auth_headers):
 @mock_aws
 def test_submit_loan_credit_score_too_high(dynamodb_tables, auth_headers):
     """A score above 850 isn't a real FICO score either — same bouncer, other direction."""
-    with patch("src.api.routes.loans.get_sqs"):
+    with patch("src.api.core.loans_repository.get_sqs"):
         response = client.post(
             "/loans/",
             json={
@@ -235,7 +299,7 @@ def test_submit_loan_credit_score_too_high(dynamodb_tables, auth_headers):
 @mock_aws
 def test_submit_loan_missing_credit_score(dynamodb_tables, auth_headers):
     """credit_score has no default — leaving it out entirely should 422, not silently pass."""
-    with patch("src.api.routes.loans.get_sqs"):
+    with patch("src.api.core.loans_repository.get_sqs"):
         response = client.post(
             "/loans/",
             json={
@@ -332,7 +396,7 @@ def build_sqs_event(transaction_data: dict) -> dict:
 
 
 @mock_aws
-def test_worker_approves_high_credit_score(dynamodb_tables):
+def test_worker_approves_high_credit_score(dynamodb_tables, audit_log_bucket):
     transactions_table, _ = dynamodb_tables
 
     event = build_sqs_event({
@@ -358,12 +422,15 @@ def test_worker_approves_high_credit_score(dynamodb_tables):
             "timestamp_transaction_id": "2026-07-05T12:00:00.000Z#txn-approved-001"
         }
     )
-    assert result["Item"]["status"] == "approved"
+    events = get_audit_events(audit_log_bucket, "txn-approved-001")
+    assert len(events) == 1
+    assert events[0]["event_type"] == "credit_score_pulled"
+    assert events[0]["actor"] == "system:worker"
     assert result["Item"]["credit_score"] == 700
 
 
 @mock_aws
-def test_worker_sends_midrange_score_to_review(dynamodb_tables):
+def test_worker_sends_midrange_score_to_review(dynamodb_tables, audit_log_bucket):
     transactions_table, _ = dynamodb_tables
 
     event = build_sqs_event({
@@ -386,10 +453,14 @@ def test_worker_sends_midrange_score_to_review(dynamodb_tables):
         }
     )
     assert result["Item"]["status"] == "review"
+    events = get_audit_events(audit_log_bucket, "txn-review-001")
+    assert len(events) == 1
+    assert events[0]["event_type"] == "credit_score_pulled"
+    assert events[0]["details"]["resulting_status"] == "review"
 
 
 @mock_aws
-def test_worker_rejects_low_credit_score(dynamodb_tables):
+def test_worker_rejects_low_credit_score(dynamodb_tables, audit_log_bucket):
     transactions_table, _ = dynamodb_tables
 
     event = build_sqs_event({
@@ -413,6 +484,10 @@ def test_worker_rejects_low_credit_score(dynamodb_tables):
     )
     assert result["Item"]["status"] == "rejected"
 
+    events = get_audit_events(audit_log_bucket, "txn-rejected-001")
+    assert events[0]["event_type"] == "credit_score_pulled"
+    assert events[0]["details"]["resulting_status"] == "rejected"
+
 
 # ============================================================
 # PATCH /loans/{loan_id}/status state machine tests
@@ -424,7 +499,7 @@ def test_worker_rejects_low_credit_score(dynamodb_tables):
 # PATCH endpoint's transition rules) everything starts from "review" in these tests.
 # ============================================================
 
-def seed_loan(table, transaction_id: str, account_id: str, status: str):
+def seed_loan(table, transaction_id: str, account_id: str, status: str, amount: str = "5000.00"):
     """Helper — directly inserts a loan item at a specific status,
     skipping the whole POST/SQS/worker pipeline since we only care
     about testing the PATCH transition rules here."""
@@ -434,7 +509,7 @@ def seed_loan(table, transaction_id: str, account_id: str, status: str):
         "transaction_id": transaction_id,
         "customer_id": "cust_001",
         "timestamp": "2026-07-05T12:00:00.000Z",
-        "amount": "5000.00",
+        "amount": amount,
         "credit_score": 580,
         "status": status,
         "type": "deposit",
@@ -443,7 +518,7 @@ def seed_loan(table, transaction_id: str, account_id: str, status: str):
 
 
 @mock_aws
-def test_review_loan_can_be_approved(dynamodb_tables, auth_headers):
+def test_review_loan_can_be_approved(dynamodb_tables, audit_log_bucket, auth_headers):
     transactions_table, _ = dynamodb_tables
     seed_loan(transactions_table, "txn-review-to-approved", "acc_001", "review")
 
@@ -455,9 +530,15 @@ def test_review_loan_can_be_approved(dynamodb_tables, auth_headers):
     assert response.status_code == 200
     assert response.json()["status"] == "approved"
 
+    events = get_audit_events(audit_log_bucket, "txn-review-to-approved")
+    assert len(events) == 1
+    assert events[0]["event_type"] == "status_changed"
+    assert events[0]["details"]["from_status"] == "review"
+    assert events[0]["details"]["to_status"] == "approved"
+
 
 @mock_aws
-def test_review_loan_can_be_rejected(dynamodb_tables, auth_headers):
+def test_review_loan_can_be_rejected(dynamodb_tables, audit_log_bucket, auth_headers):
     transactions_table, _ = dynamodb_tables
     seed_loan(transactions_table, "txn-review-to-rejected", "acc_001", "review")
 
@@ -468,6 +549,12 @@ def test_review_loan_can_be_rejected(dynamodb_tables, auth_headers):
     )
     assert response.status_code == 200
     assert response.json()["status"] == "rejected"
+
+    events = get_audit_events(audit_log_bucket, "txn-review-to-rejected")
+    assert len(events) == 1
+    assert events[0]["event_type"] == "status_changed"
+    assert events[0]["details"]["from_status"] == "review"
+    assert events[0]["details"]["to_status"] == "rejected"
 
 
 @mock_aws
@@ -484,9 +571,10 @@ def test_rejected_loan_cannot_be_changed(dynamodb_tables, auth_headers):
 
 
 @mock_aws
-def test_approved_loan_can_move_to_funded(dynamodb_tables, auth_headers):
+def test_approved_loan_can_move_to_funded(dynamodb_tables, audit_log_bucket, auth_headers):
     transactions_table, _ = dynamodb_tables
-    seed_loan(transactions_table, "txn-approved-to-funded", "acc_001", "approved")
+    seeded_amount = 5000.00
+    seed_loan(transactions_table, "txn-approved-to-funded", "acc_001", "approved", amount=str(seeded_amount))
 
     response = client.patch(
         "/loans/txn-approved-to-funded/status",
@@ -495,6 +583,19 @@ def test_approved_loan_can_move_to_funded(dynamodb_tables, auth_headers):
     )
     assert response.status_code == 200
     assert response.json()["status"] == "funded"
+
+    events = get_audit_events(audit_log_bucket, "txn-approved-to-funded")
+    assert len(events) == 2
+
+    event_types = {e["event_type"] for e in events}
+    assert event_types == {"status_changed", "loan_disbursed"}
+
+    status_changed_event = next(e for e in events if e["event_type"] == "status_changed")
+    assert status_changed_event["details"]["from_status"] == "approved"
+    assert status_changed_event["details"]["to_status"] == "funded"
+
+    disbursed_event = next(e for e in events if e["event_type"] == "loan_disbursed")
+    assert disbursed_event["details"]["amount"] == seeded_amount
 
 
 @mock_aws
@@ -513,7 +614,7 @@ def test_approved_loan_cannot_go_back_to_review(dynamodb_tables, auth_headers):
 
 
 @mock_aws
-def test_funded_loan_can_be_repaid(dynamodb_tables, auth_headers):
+def test_funded_loan_can_be_repaid(dynamodb_tables, audit_log_bucket, auth_headers):
     transactions_table, _ = dynamodb_tables
     seed_loan(transactions_table, "txn-funded-to-repaid", "acc_001", "funded")
 
@@ -524,6 +625,12 @@ def test_funded_loan_can_be_repaid(dynamodb_tables, auth_headers):
     )
     assert response.status_code == 200
     assert response.json()["status"] == "repaid"
+
+    events = get_audit_events(audit_log_bucket, "txn-funded-to-repaid")
+    assert len(events) == 1
+    assert events[0]["event_type"] == "status_changed"
+    assert events[0]["details"]["from_status"] == "funded"
+    assert events[0]["details"]["to_status"] == "repaid"
 
 
 @mock_aws

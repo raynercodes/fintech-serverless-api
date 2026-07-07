@@ -8,6 +8,26 @@ Parameters:
     Default: dev
     AllowedValues: [dev, staging, prod]
 
+  JwtKmsKeyArn:
+    Type: String
+    Description: "ARN of the CMK protecting the JWT secret"
+
+  EncryptionKmsKeyArn:
+    Type: String
+    Description: "ARN of the CMK protecting the AES-256-GCM encryption key"
+
+  PasswordPepperKmsKeyArn:
+    Type: String
+    Description: "ARN of the CMK protecting the password pepper"
+
+  DynamoDbKmsKeyArn:
+    Type: String
+    Description: "ARN of the CMK for DynamoDB encryption at rest"
+
+  AuditLogKmsKeyArn:
+    Type: String
+    Description: "ARN of the CMK protecting the S3 compliance vault"
+
 Globals:
   Function:
     Runtime: python3.12
@@ -21,9 +41,51 @@ Globals:
         USERS_TABLE_NAME: !Ref FintechUsersTable
         SQS_QUEUE_URL: !Ref FintechTransactionQueue
         FUNCTION_NAME: !Sub fintech-api-${Environment}
+        AUDIT_LOG_BUCKET_NAME: !Ref FintechAuditLogBucket
         APP_VERSION: "1.0.0"
 
 Resources:
+
+  # -------------------------------------------------------
+  # CloudWatch Log Groups — explicit retention, 14 days
+  # Without these, Lambda auto-creates log groups with NO
+  # expiration — every debug print lives forever, silently
+  # accumulating storage cost. This caps it.
+  # -------------------------------------------------------
+  FintechApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/lambda/fintech-api-${Environment}
+      RetentionInDays: 14
+
+  FintechAuthorizerLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/lambda/fintech-authorizer-${Environment}
+      RetentionInDays: 14
+
+  FintechWorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/lambda/fintech-worker-${Environment}
+      RetentionInDays: 14
+
+  FintechValidateDeploymentLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/lambda/fintech-validate-deployment-${Environment}
+      RetentionInDays: 14
+
+  FintechValidateProductionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/lambda/fintech-validate-production-${Environment}
+      RetentionInDays: 14
 
   # -------------------------------------------------------
   # SQS FIFO Dead Letter Queue
@@ -140,6 +202,25 @@ Resources:
                 Action:
                   - cloudwatch:GetMetricStatistics
                 Resource: '*'
+              # S3 Audit Log — write-only. GetObject included only if
+              # you want an endpoint to read records back later.
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                Resource: !Sub ${FintechAuditLogBucket.Arn}/*
+              # Explicit DENY — even if a future policy change accidentally
+              # grants delete permissions somewhere else, an explicit Deny
+              # ALWAYS wins over any Allow in IAM evaluation. This is a
+              # second, independent layer on top of Object Lock itself.
+              - Effect: Deny
+                Action:
+                  - s3:DeleteObject
+                  - s3:DeleteObjectVersion
+                  - s3:PutLifecycleConfiguration
+                Resource:
+                  - !GetAtt FintechAuditLogBucket.Arn
+                  - !Sub ${FintechAuditLogBucket.Arn}/*
 
   # -------------------------------------------------------
   # CodeDeploy Service Role
@@ -393,6 +474,7 @@ Resources:
       SSESpecification:
         SSEEnabled: true
         SSEType: KMS
+        KMSMasterKeyId: !Ref DynamoDbKmsKeyArn
       AttributeDefinitions:
         - AttributeName: account_id
           AttributeType: S
@@ -442,6 +524,7 @@ Resources:
       SSESpecification:
         SSEEnabled: true
         SSEType: KMS
+        KMSMasterKeyId: !Ref DynamoDbKmsKeyArn
       AttributeDefinitions:
         - AttributeName: email
           AttributeType: S
@@ -462,6 +545,10 @@ Resources:
     Properties:
       TableName: !Sub fintech-cache-${Environment}
       BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !Ref DynamoDbKmsKeyArn
       AttributeDefinitions:
         - AttributeName: cache_key
           AttributeType: S
@@ -476,6 +563,68 @@ Resources:
           Value: fintech-serverless
         - Key: Environment
           Value: !Ref Environment
+
+  # -------------------------------------------------------
+  # S3 — Audit Log Bucket
+  # -------------------------------------------------------
+  FintechAuditLogBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub fintech-audit-log-${AWS::AccountId}-${Environment}
+      VersioningConfiguration:
+        Status: Enabled
+      ObjectLockEnabled: true
+      ObjectLockConfiguration:
+        ObjectLockEnabled: Enabled
+        Rule:
+          DefaultRetention:
+            Mode: COMPLIANCE
+            Years: 3
+      LifecycleConfiguration:
+        Rules:
+          - Id: TransitionToGlacierFlexibleRetrieval
+            Status: Enabled
+            Transitions:
+              - StorageClass: GLACIER
+                TransitionInDays: 60
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !Ref AuditLogKmsKeyArn
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Project
+          Value: fintech-serverless
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Explicit protection layer, on top of Object Lock itself —
+  # even a future policy mistake elsewhere can't override this Deny
+  AuditLogBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FintechAuditLogBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyDeleteEver
+            Effect: Deny
+            Principal: '*'
+            Action:
+              - s3:DeleteObject
+              - s3:DeleteObjectVersion
+            Resource: !Sub ${FintechAuditLogBucket.Arn}/*   # object-level — needs /*
+          - Sid: DenyLifecycleChangeEver
+            Effect: Deny
+            Principal: '*'
+            Action:
+              - s3:PutLifecycleConfiguration
+            Resource: !GetAtt FintechAuditLogBucket.Arn      # bucket-level — no /*
 
   # -------------------------------------------------------
   # CloudWatch — Billing Alarm

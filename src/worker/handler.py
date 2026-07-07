@@ -6,6 +6,7 @@ from boto3.dynamodb.conditions import Attr
 from src.api.core.database import get_transactions_table
 from src.api.core.security import encrypt_pii
 from src.api.core.cache import cache_delete
+from src.api.core.audit import write_audit_event
 
 
 # Outside handler — L1 cached in execution context
@@ -52,6 +53,13 @@ def process_single(table, transaction_data: dict):
     credit_score = transaction_data["credit_score"]
 
     loan_status = determine_loan_status(credit_score)
+
+    write_audit_event(
+    transaction_id=transaction_id,
+    event_type="credit_score_pulled",
+    actor="system:worker",
+    details={"credit_score": credit_score, "resulting_status": loan_status}
+    )
 
     # Conditional write — attribute_not_exists prevents duplicate processing
     # Second layer of duplicate prevention after SQS FIFO deduplication
