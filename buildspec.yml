@@ -1,0 +1,18 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - pip install aws-sam-cli --break-system-packages
+  build:
+    commands:
+      - cp -r src ./package/
+      - sam build --template infrastructure/template.yaml --no-cached
+      - sam package --s3-bucket $ARTIFACT_BUCKET --output-template-file packaged-template.yaml
+
+artifacts:
+  files:
+    - packaged-template.yaml
+  discard-paths: no

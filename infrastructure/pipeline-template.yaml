@@ -1,0 +1,354 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CI/CD Pipeline for Fintech Serverless API — separate stack, manages deploys TO the app stacks, never lives inside them
+
+Parameters:
+  GitHubOwner:
+    Type: String
+    Default: raynercodes
+  GitHubRepo:
+    Type: String
+    Default: fintech-serverless-api
+  GitHubBranch:
+    Type: String
+    Default: dev
+  NotificationEmail:
+    Type: String
+    Description: "Email to receive manual approval notifications"
+
+Resources:
+
+  # -------------------------------------------------------
+  # CodeStar Connection — links this pipeline to your GitHub repo.
+  # NOTE: after this deploys, you MUST go to the CodePipeline console
+  # → Settings → Connections, find this connection showing status
+  # "Pending", and click "Update pending connection" to authorize
+  # AWS's access to your GitHub account. This is a ONE-TIME manual
+  # step — CloudFormation cannot complete this part on its own.
+  # -------------------------------------------------------
+  GitHubConnection:
+    Type: AWS::CodeStarConnections::Connection
+    Properties:
+      ConnectionName: fintech-github-connection
+      ProviderType: GitHub
+
+  # -------------------------------------------------------
+  # S3 — dedicated artifact bucket for the PIPELINE itself
+  # (separate from your existing SAM deployment artifacts bucket —
+  # this one holds source snapshots and build outputs specifically)
+  # -------------------------------------------------------
+  PipelineArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub fintech-pipeline-artifacts-${AWS::AccountId}
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # -------------------------------------------------------
+  # SNS — approval notifications, both gates share one topic
+  # -------------------------------------------------------
+  ApprovalNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: fintech-pipeline-approvals
+
+  ApprovalEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref ApprovalNotificationTopic
+      Protocol: email
+      Endpoint: !Ref NotificationEmail
+
+  # -------------------------------------------------------
+  # IAM — CodeBuild service role
+  # -------------------------------------------------------
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodeBuildPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetBucketLocation
+                Resource:
+                  - !Sub ${PipelineArtifactBucket.Arn}/*
+                  - !Sub ${PipelineArtifactBucket.Arn}
+                  - arn:aws:s3:::fintech-serverless-artifacts-dev/*
+                  - arn:aws:s3:::fintech-serverless-artifacts-dev
+
+  # -------------------------------------------------------
+  # CodeBuild — runs sam build + sam package
+  # -------------------------------------------------------
+  BuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: fintech-build
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
+        EnvironmentVariables:
+          - Name: ARTIFACT_BUCKET
+            Value: fintech-serverless-artifacts-dev
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: buildspec.yml
+
+  # -------------------------------------------------------
+  # IAM — CloudFormation deploy role (what CodePipeline's
+  # CloudFormation actions actually assume to create/update
+  # the staging/prod app stacks)
+  #
+  # NOTE: broad by necessity — the app template itself creates
+  # IAM roles, Lambda, API Gateway, DynamoDB, S3, ACM, and
+  # CloudFront, so this role needs permission across all of
+  # those services. Scoping this down to exact resource ARNs
+  # per service is a legitimate future hardening step — noting
+  # this honestly rather than pretending it's fully least-privilege.
+  # -------------------------------------------------------
+  CloudFormationDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CloudFormationDeployPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:*
+                  - dynamodb:*
+                  - sqs:*
+                  - apigateway:*
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:PassRole
+                  - iam:TagRole
+                  - s3:*
+                  - logs:*
+                  - cloudwatch:*
+                  - codedeploy:*
+                  - acm:*
+                  - cloudfront:*
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                  - kms:DescribeKey
+                Resource: '*'
+
+  # -------------------------------------------------------
+  # IAM — CodePipeline service role
+  # -------------------------------------------------------
+  PipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: PipelinePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetBucketVersioning
+                Resource:
+                  - !Sub ${PipelineArtifactBucket.Arn}/*
+                  - !GetAtt PipelineArtifactBucket.Arn
+              - Effect: Allow
+                Action:
+                  - codestar-connections:UseConnection
+                Resource: !Ref GitHubConnection
+              - Effect: Allow
+                Action:
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                Resource: !GetAtt BuildProject.Arn
+              - Effect: Allow
+                Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:UpdateStack
+                  - cloudformation:DescribeStacks
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:GetTemplate
+                  - cloudformation:ValidateTemplate
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource: !GetAtt CloudFormationDeployRole.Arn
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref ApprovalNotificationTopic
+
+  # -------------------------------------------------------
+  # The Pipeline itself
+  # -------------------------------------------------------
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: fintech-serverless-pipeline
+      RoleArn: !GetAtt PipelineServiceRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref PipelineArtifactBucket
+      Stages:
+
+        - Name: Source
+          Actions:
+            - Name: GitHubSource
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: '1'
+              Configuration:
+                ConnectionArn: !Ref GitHubConnection
+                FullRepositoryId: !Sub "${GitHubOwner}/${GitHubRepo}"
+                BranchName: !Ref GitHubBranch
+              OutputArtifacts:
+                - Name: SourceOutput
+
+        - Name: Build
+          Actions:
+            - Name: BuildAndPackage
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref BuildProject
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+
+        - Name: ApproveStaging
+          Actions:
+            - Name: ManualApprovalStaging
+              ActionTypeId:
+                Category: Approval
+                Owner: AWS
+                Provider: Manual
+                Version: '1'
+              Configuration:
+                NotificationArn: !Ref ApprovalNotificationTopic
+                CustomData: "Approve to deploy to STAGING"
+
+        - Name: DeployStaging
+          Actions:
+            - Name: DeployToStaging
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: '1'
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                StackName: fintech-serverless-staging
+                TemplatePath: BuildOutput::packaged-template.yaml
+                Capabilities: CAPABILITY_IAM
+                RoleArn: !GetAtt CloudFormationDeployRole.Arn
+                ParameterOverrides: |
+                  {
+                    "Environment": "staging",
+                    "JwtKmsKeyArn": "arn:aws:kms:us-east-1:181250799646:key/2ebdd663-9bdd-41fb-895b-dad1edbb0e19",
+                    "EncryptionKmsKeyArn": "arn:aws:kms:us-east-1:181250799646:key/3080a2c0-34b6-4760-9754-e88d2047cc37",
+                    "PasswordPepperKmsKeyArn": "arn:aws:kms:us-east-1:181250799646:key/a95af96e-c57a-4983-8b8f-eb3defe179a7",
+                    "DynamoDbKmsKeyArn": "arn:aws:kms:us-east-1:181250799646:key/898be084-35e4-4d59-af4f-06e42aec6ee3",
+                    "AuditLogKmsKeyArn": "arn:aws:kms:us-east-1:181250799646:key/bcd6a6d1-ff83-47ab-a893-2f5384626601"
+                  }
+              InputArtifacts:
+                - Name: BuildOutput
+
+        - Name: ApproveProd
+          Actions:
+            - Name: ManualApprovalProd
+              ActionTypeId:
+                Category: Approval
+                Owner: AWS
+                Provider: Manual
+                Version: '1'
+              Configuration:
+                NotificationArn: !Ref ApprovalNotificationTopic
+                CustomData: "Approve to deploy to PRODUCTION"
+
+        - Name: DeployProd
+          Actions:
+            - Name: DeployToProd
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: '1'
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                StackName: fintech-serverless-prod
+                TemplatePath: BuildOutput::packaged-template.yaml
+                Capabilities: CAPABILITY_IAM
+                RoleArn: !GetAtt CloudFormationDeployRole.Arn
+                ParameterOverrides: |
+                  {
+                    "Environment": "prod",
+                    "JwtKmsKeyArn": "arn:aws:kms:us-east-1:181250799646:key/2ebdd663-9bdd-41fb-895b-dad1edbb0e19",
+                    "EncryptionKmsKeyArn": "arn:aws:kms:us-east-1:181250799646:key/3080a2c0-34b6-4760-9754-e88d2047cc37",
+                    "PasswordPepperKmsKeyArn": "arn:aws:kms:us-east-1:181250799646:key/a95af96e-c57a-4983-8b8f-eb3defe179a7",
+                    "DynamoDbKmsKeyArn": "arn:aws:kms:us-east-1:181250799646:key/898be084-35e4-4d59-af4f-06e42aec6ee3",
+                    "AuditLogKmsKeyArn": "arn:aws:kms:us-east-1:181250799646:key/bcd6a6d1-ff83-47ab-a893-2f5384626601"
+                  }
+              InputArtifacts:
+                - Name: BuildOutput
+
+Outputs:
+  PipelineName:
+    Value: !Ref Pipeline
+  GitHubConnectionArn:
+    Value: !Ref GitHubConnection

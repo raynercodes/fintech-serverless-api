@@ -5,7 +5,7 @@ Description: Fintech Serverless Loan Lending Platform
 Parameters:
   Environment:
     Type: String
-    Default: dev
+    # Default: dev
     AllowedValues: [dev, staging, prod]
 
   JwtKmsKeyArn:
@@ -27,6 +27,9 @@ Parameters:
   AuditLogKmsKeyArn:
     Type: String
     Description: "ARN of the CMK protecting the S3 compliance vault"
+
+Conditions:
+  IsProd: !Equals [!Ref Environment, "prod"]
 
 Globals:
   Function:
@@ -85,6 +88,18 @@ Resources:
     DeletionPolicy: Retain
     Properties:
       LogGroupName: !Sub /aws/lambda/fintech-validate-production-${Environment}
+      RetentionInDays: 14
+
+  FintechCleanupLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/fintech-cleanup-${Environment}
+      RetentionInDays: 14
+
+  FintechBackupLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/fintech-backup-${Environment}
       RetentionInDays: 14
 
   # -------------------------------------------------------
@@ -221,6 +236,97 @@ Resources:
                 Resource:
                   - !GetAtt FintechAuditLogBucket.Arn
                   - !Sub ${FintechAuditLogBucket.Arn}/*
+
+  # -------------------------------------------------------
+  # EventBridge IAM Role — for scheduled tasks (e.g., cleanup, maintenance)
+  # -------------------------------------------------------
+  FintechScheduledJobsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub fintech-scheduled-jobs-role-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ScheduledJobsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Cleanup job — Scan + targeted UpdateItem only, no
+              # Query/PutItem/DeleteItem needed
+              - Effect: Allow
+                Action:
+                  - dynamodb:Scan
+                  - dynamodb:UpdateItem
+                Resource: !GetAtt FintechTransactionsTable.Arn
+              # Backup job — on-demand backup lifecycle only
+              - Effect: Allow
+                Action:
+                  - dynamodb:CreateBackup
+                  - dynamodb:ListBackups
+                  - dynamodb:DeleteBackup
+                  - dynamodb:DescribeBackup
+                Resource:
+                  - !GetAtt FintechTransactionsTable.Arn
+                  - !GetAtt FintechUsersTable.Arn
+                  - !Sub "${FintechTransactionsTable.Arn}/backup/*"
+                  - !Sub "${FintechUsersTable.Arn}/backup/*"
+              # Audit vault write — cleanup job needs this, backup job doesn't
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource: !Sub ${FintechAuditLogBucket.Arn}/*
+              - Effect: Allow
+                Action:
+                  - kms:GenerateDataKey
+                Resource: !Ref AuditLogKmsKeyArn
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                Resource: !Ref DynamoDbKmsKeyArn
+
+
+  # -------------------------------------------------------
+  # EventBridge CRON Jobs — scheduled cleanup job
+  # -------------------------------------------------------
+  FintechCleanupFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub fintech-cleanup-${Environment}
+      Description: "Daily scan for stale pending loans — flags for human review, never deletes"
+      CodeUri: ../package/
+      Handler: src.scheduled.cleanup_handler.handler
+      Role: !GetAtt FintechScheduledJobsRole.Arn
+      Timeout: 60
+      Events:
+        DailyCleanup:
+          Type: Schedule
+          Properties:
+            Schedule: rate(1 day)
+            Description: "Runs the stale-pending-transaction cleanup daily"
+
+  FintechBackupFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub fintech-backup-${Environment}
+      Description: "Daily on-demand DynamoDB backup with 35-day rolling retention"
+      CodeUri: ../package/
+      Handler: src.scheduled.backup_handler.handler
+      Role: !GetAtt FintechScheduledJobsRole.Arn
+      Timeout: 60
+      Events:
+        DailyBackup:
+          Type: Schedule
+          Properties:
+            Schedule: rate(1 day)
+            Description: "Runs the DynamoDB backup job daily"
 
   # -------------------------------------------------------
   # CodeDeploy Service Role
@@ -457,8 +563,8 @@ Resources:
       MethodSettings:
         - ResourcePath: '/*'
           HttpMethod: '*'
-          ThrottlingBurstLimit: 100
-          ThrottlingRateLimit: 50
+          ThrottlingBurstLimit: 1000 #100
+          ThrottlingRateLimit: 500 #50
           LoggingLevel: INFO
           DataTraceEnabled: false
           MetricsEnabled: true
@@ -627,6 +733,81 @@ Resources:
             Resource: !GetAtt FintechAuditLogBucket.Arn      # bucket-level — no /*
 
   # -------------------------------------------------------
+  # CloudFront Distribution — fintech.raynercodes.dev
+  # Regional API Gateway as custom origin. Only exists in
+  # prod — dev/staging hit the raw execute-api URL directly,
+  # no CDN needed for internal testing stages.
+  # -------------------------------------------------------
+  FintechCloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Condition: IsProd
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "fintech-serverless-${Environment}"
+        Aliases:
+          - fintech.raynercodes.dev
+        ViewerCertificate:
+          AcmCertificateArn: !Ref FintechCertificate
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+        Origins:
+          - Id: FintechApiGatewayOrigin
+            # Regional API Gateway's own domain — NOT the CloudFront
+            # domain, this is what CloudFront forwards requests TO
+            DomainName: !Sub "${FintechApi}.execute-api.${AWS::Region}.amazonaws.com"
+            OriginPath: !Sub "/${Environment}"
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols:
+                - TLSv1.2
+        DefaultCacheBehavior:
+          TargetOriginId: FintechApiGatewayOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+            - PUT
+            - PATCH
+            - POST
+            - DELETE
+          CachedMethods:
+            - GET
+            - HEAD
+          # This is an API, not static content — caching responses
+          # would serve stale loan data. ForwardedValues disabled
+          # caching entirely by forwarding everything through.
+          ForwardedValues:
+            QueryString: true
+            Headers:
+              - Authorization
+              - Content-Type
+            Cookies:
+              Forward: none
+          MinTTL: 0
+          DefaultTTL: 0
+          MaxTTL: 0
+  
+  # -------------------------------------------------------
+  # ACM Certificate — fintech.raynercodes.dev
+  # CloudFront requires certs in us-east-1 specifically,
+  # regardless of where the rest of the stack lives — this
+  # happens to already match our region, so no cross-region
+  # nested stack needed.
+  # -------------------------------------------------------
+  FintechCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Condition: IsProd
+    DeletionPolicy: Retain
+    Properties:
+      DomainName: fintech.raynercodes.dev
+      ValidationMethod: DNS
+      Tags:
+        - Key: Project
+          Value: fintech-serverless
+
+  # -------------------------------------------------------
   # CloudWatch — Billing Alarm
   # -------------------------------------------------------
   BillingAlarm:
@@ -690,3 +871,15 @@ Outputs:
     Value: !GetAtt FintechTransactionDLQ.Arn
     Export:
       Name: !Sub fintech-dlq-arn-${Environment}
+
+  CertificateArn:
+    Condition: IsProd
+    Value: !Ref FintechCertificate
+    Export:
+      Name: !Sub fintech-certificate-arn-${Environment}
+
+  CloudFrontDomainName:
+    Condition: IsProd
+    Value: !GetAtt FintechCloudFrontDistribution.DomainName
+    Export:
+      Name: !Sub fintech-cloudfront-domain-${Environment}

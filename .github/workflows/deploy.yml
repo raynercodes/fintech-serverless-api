@@ -1,0 +1,103 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [dev]
+
+permissions:
+  id-token: write   # required for OIDC — lets this workflow request an AWS credential
+  contents: read
+
+jobs:
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - run: pytest tests/ -v
+
+  build:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install aws-sam-cli
+      - run: cp -r src ./package/
+      - run: sam build --template infrastructure/template.yaml --no-cached
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::181250799646:role/github-actions-fintech-deploy
+          aws-region: us-east-1
+      - run: sam package --s3-bucket fintech-serverless-artifacts-dev --output-template-file packaged-template.yaml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packaged-template
+          path: packaged-template.yaml
+
+  deploy-staging:
+    runs-on: ubuntu-latest
+    needs: build
+    environment: staging   # <- this is what makes GitHub pause for approval
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: packaged-template
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::181250799646:role/github-actions-fintech-deploy
+          aws-region: us-east-1
+      - run: pip install aws-sam-cli
+      - run: |
+          sam deploy \
+            --template-file packaged-template.yaml \
+            --stack-name fintech-serverless-staging \
+            --capabilities CAPABILITY_IAM \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --region us-east-1 \
+            --parameter-overrides \
+              Environment=staging \
+              JwtKmsKeyArn=arn:aws:kms:us-east-1:181250799646:key/2ebdd663-9bdd-41fb-895b-dad1edbb0e19 \
+              EncryptionKmsKeyArn=arn:aws:kms:us-east-1:181250799646:key/3080a2c0-34b6-4760-9754-e88d2047cc37 \
+              PasswordPepperKmsKeyArn=arn:aws:kms:us-east-1:181250799646:key/a95af96e-c57a-4983-8b8f-eb3defe179a7 \
+              DynamoDbKmsKeyArn=arn:aws:kms:us-east-1:181250799646:key/898be084-35e4-4d59-af4f-06e42aec6ee3 \
+              AuditLogKmsKeyArn=arn:aws:kms:us-east-1:181250799646:key/bcd6a6d1-ff83-47ab-a893-2f5384626601
+
+  deploy-prod:
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    environment: production   # <- second, separate approval gate
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: packaged-template
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::181250799646:role/github-actions-fintech-deploy
+          aws-region: us-east-1
+      - run: pip install aws-sam-cli
+      - run: |
+          sam deploy \
+            --template-file packaged-template.yaml \
+            --stack-name fintech-serverless-prod \
+            --capabilities CAPABILITY_IAM \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --region us-east-1 \
+            --parameter-overrides \
+              Environment=prod \
+              JwtKmsKeyArn=arn:aws:kms:us-east-1:181250799646:key/2ebdd663-9bdd-41fb-895b-dad1edbb0e19 \
+              EncryptionKmsKeyArn=arn:aws:kms:us-east-1:181250799646:key/3080a2c0-34b6-4760-9754-e88d2047cc37 \
+              PasswordPepperKmsKeyArn=arn:aws:kms:us-east-1:181250799646:key/a95af96e-c57a-4983-8b8f-eb3defe179a7 \
+              DynamoDbKmsKeyArn=arn:aws:kms:us-east-1:181250799646:key/898be084-35e4-4d59-af4f-06e42aec6ee3 \
+              AuditLogKmsKeyArn=arn:aws:kms:us-east-1:181250799646:key/bcd6a6d1-ff83-47ab-a893-2f5384626601

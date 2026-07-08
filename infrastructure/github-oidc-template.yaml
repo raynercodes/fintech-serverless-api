@@ -1,0 +1,92 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: GitHub Actions OIDC federation — lets GitHub assume an AWS role with no stored credentials
+
+Resources:
+
+  # -------------------------------------------------------
+  # One per AWS account — tells AWS to trust tokens issued
+  # by GitHub's own OIDC token service
+  # -------------------------------------------------------
+  GitHubOIDCProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+
+  # -------------------------------------------------------
+  # The role GitHub Actions assumes. Trust policy is scoped
+  # tightly: only THIS repo, and only for the specific
+  # triggers we actually use (the dev branch build, plus the
+  # staging/production environment-gated deploy jobs) — not
+  # a blanket "any workflow in any repo" grant.
+  # -------------------------------------------------------
+  GitHubActionsDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: github-actions-fintech-deploy
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref GitHubOIDCProvider
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub:
+                  - "repo:raynercodes/fintech-serverless-api:ref:refs/heads/dev"
+                  - "repo:raynercodes/fintech-serverless-api:environment:staging"
+                  - "repo:raynercodes/fintech-serverless-api:environment:production"
+      Policies:
+        - PolicyName: DeployPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:UpdateStack
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:GetTemplate
+                  - cloudformation:ValidateTemplate
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - lambda:*
+                  - dynamodb:*
+                  - sqs:*
+                  - apigateway:*
+                  - s3:*
+                  - logs:*
+                  - cloudwatch:*
+                  - codedeploy:*
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                  - kms:DescribeKey
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:PassRole
+                  - iam:TagRole
+                Resource: '*'
+
+Outputs:
+  DeployRoleArn:
+    Value: !GetAtt GitHubActionsDeployRole.Arn
