@@ -160,6 +160,7 @@ jobs:
         if: needs.plan-staging.outputs.has_changes != 'true'
         run: echo "Staging already matches this template — nothing to deploy this run."
       - name: Execute the EXACT changeset already created and reviewed above
+        if: needs.plan-staging.outputs.has_changes == 'true'
         run: |
           aws cloudformation execute-change-set \
             --stack-name fintech-serverless-staging \
@@ -171,6 +172,9 @@ jobs:
           else
             aws cloudformation wait stack-update-complete --stack-name fintech-serverless-staging --region us-east-1
           fi
+      - name: No changes to deploy
+        if: needs.plan-staging.outputs.has_changes != 'true'
+        run: echo "Staging already matches this template — nothing to deploy this run."
 
   # ============================================================
   # PLAN and APPLY for PRODUCTION — same as above, but gated by
@@ -289,6 +293,7 @@ jobs:
         if: needs.plan-prod.outputs.has_changes != 'true'
         run: echo "Production already matches this template — nothing to deploy this run."
       - name: Execute the EXACT changeset already created and reviewed above
+        if: needs.plan-prod.outputs.has_changes == 'true'
         run: |
           aws cloudformation execute-change-set \
             --stack-name fintech-serverless-prod \
@@ -300,3 +305,6 @@ jobs:
           else
             aws cloudformation wait stack-update-complete --stack-name fintech-serverless-prod --region us-east-1
           fi
+      - name: No changes to deploy
+        if: needs.plan-prod.outputs.has_changes != 'true'
+        run: echo "Production already matches this template — nothing to deploy this run."
