@@ -64,7 +64,7 @@ jobs:
         id: changeset-type
         run: |
           STACK_STATUS=$(aws cloudformation describe-stacks --stack-name fintech-serverless-staging --region us-east-1 --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "NOT_FOUND")
-          if [ "$STACK_STATUS" == "NOT_FOUND" ] || [ "$STACK_STATUS" == "DELETE_COMPLETE" ] || [ "$STACK_STATUS" == "REVIEW_IN_PROGRESS" ]; then
+          if [ "$STACK_STATUS" == "NOT_FOUND" ] || [ "$STACK_STATUS" == "DELETE_COMPLETE" ] || [ "$STACK_STATUS" == "REVIEW_IN_PROGRESS" ] || [ "$STACK_STATUS" == "ROLLBACK_COMPLETE" ]; then
             echo "type=CREATE" >> "$GITHUB_OUTPUT"
           else
             echo "type=UPDATE" >> "$GITHUB_OUTPUT"
@@ -159,7 +159,7 @@ jobs:
         id: changeset-type
         run: |
           STACK_STATUS=$(aws cloudformation describe-stacks --stack-name fintech-serverless-prod --region us-east-1 --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "NOT_FOUND")
-          if [ "$STACK_STATUS" == "NOT_FOUND" ] || [ "$STACK_STATUS" == "DELETE_COMPLETE" ] || [ "$STACK_STATUS" == "REVIEW_IN_PROGRESS" ]; then
+          if [ "$STACK_STATUS" == "NOT_FOUND" ] || [ "$STACK_STATUS" == "DELETE_COMPLETE" ] || [ "$STACK_STATUS" == "REVIEW_IN_PROGRESS" ] || [ "$STACK_STATUS" == "ROLLBACK_COMPLETE" ]; then
             echo "type=CREATE" >> "$GITHUB_OUTPUT"
           else
             echo "type=UPDATE" >> "$GITHUB_OUTPUT"
