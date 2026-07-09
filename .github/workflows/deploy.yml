@@ -60,12 +60,21 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::181250799646:role/github-actions-fintech-deploy
           aws-region: us-east-1
+      - name: Determine changeset type (handles deleted/stub stacks correctly)
+        id: changeset-type
+        run: |
+          STACK_STATUS=$(aws cloudformation describe-stacks --stack-name fintech-serverless-staging --region us-east-1 --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "NOT_FOUND")
+          if [ "$STACK_STATUS" == "NOT_FOUND" ] || [ "$STACK_STATUS" == "DELETE_COMPLETE" ] || [ "$STACK_STATUS" == "REVIEW_IN_PROGRESS" ]; then
+            echo "type=CREATE" >> "$GITHUB_OUTPUT"
+          else
+            echo "type=UPDATE" >> "$GITHUB_OUTPUT"
+          fi
       - name: Create changeset (does NOT execute anything yet)
         run: |
           aws cloudformation create-change-set \
             --stack-name fintech-serverless-staging \
             --change-set-name gha-${{ github.run_id }} \
-            --change-set-type $(aws cloudformation describe-stacks --stack-name fintech-serverless-staging --region us-east-1 >/dev/null 2>&1 && echo UPDATE || echo CREATE) \
+            --change-set-type ${{ steps.changeset-type.outputs.type }} \
             --template-body file://packaged-template.yaml \
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --parameters \
@@ -146,12 +155,21 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::181250799646:role/github-actions-fintech-deploy
           aws-region: us-east-1
+      - name: Determine changeset type (handles deleted/stub stacks correctly)
+        id: changeset-type
+        run: |
+          STACK_STATUS=$(aws cloudformation describe-stacks --stack-name fintech-serverless-prod --region us-east-1 --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "NOT_FOUND")
+          if [ "$STACK_STATUS" == "NOT_FOUND" ] || [ "$STACK_STATUS" == "DELETE_COMPLETE" ] || [ "$STACK_STATUS" == "REVIEW_IN_PROGRESS" ]; then
+            echo "type=CREATE" >> "$GITHUB_OUTPUT"
+          else
+            echo "type=UPDATE" >> "$GITHUB_OUTPUT"
+          fi
       - name: Create changeset (does NOT execute anything yet)
         run: |
           aws cloudformation create-change-set \
             --stack-name fintech-serverless-prod \
             --change-set-name gha-${{ github.run_id }} \
-            --change-set-type $(aws cloudformation describe-stacks --stack-name fintech-serverless-prod --region us-east-1 >/dev/null 2>&1 && echo UPDATE || echo CREATE) \
+            --change-set-type ${{ steps.changeset-type.outputs.type }} \
             --template-body file://packaged-template.yaml \
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --parameters \
