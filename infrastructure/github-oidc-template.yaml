@@ -86,6 +86,13 @@ Resources:
                   - iam:PassRole
                   - iam:TagRole
                 Resource: '*'
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                  - kms:DescribeKey
+                  - kms:CreateGrant
+                Resource: '*'
 
 Outputs:
   DeployRoleArn:
