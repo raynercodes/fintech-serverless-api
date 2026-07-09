@@ -86,7 +86,7 @@ def cache_set(key: str, value, ttl_seconds: int = 300):
     l1_set(key, value, ttl_seconds)
     l2_set(key, value, ttl_seconds)
 
-
+# function to delete cache from both L1 and L2
 def cache_delete(key: str):
     l1_delete(key)
     l2_delete(key)
