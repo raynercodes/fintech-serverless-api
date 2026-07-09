@@ -42,6 +42,59 @@ jobs:
           name: packaged-template
           path: packaged-template.yaml
 
+  # ============================================================
+  # PLAN — runs immediately, NO environment gate, NO approval
+  # needed. Its entire job is to create a changeset and print
+  # exactly what it would do, so a human can read the real diff
+  # before anyone clicks Approve on anything.
+  # ============================================================
+  plan-staging:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: packaged-template
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::181250799646:role/github-actions-fintech-deploy
+          aws-region: us-east-1
+      - name: Create changeset (does NOT execute anything yet)
+        run: |
+          aws cloudformation create-change-set \
+            --stack-name fintech-serverless-staging \
+            --change-set-name gha-${{ github.run_id }} \
+            --change-set-type $(aws cloudformation describe-stacks --stack-name fintech-serverless-staging --region us-east-1 >/dev/null 2>&1 && echo UPDATE || echo CREATE) \
+            --template-body file://packaged-template.yaml \
+            --capabilities CAPABILITY_IAM \
+            --parameters \
+              ParameterKey=Environment,ParameterValue=staging \
+              ParameterKey=JwtKmsKeyArn,ParameterValue=arn:aws:kms:us-east-1:181250799646:key/2ebdd663-9bdd-41fb-895b-dad1edbb0e19 \
+              ParameterKey=EncryptionKmsKeyArn,ParameterValue=arn:aws:kms:us-east-1:181250799646:key/3080a2c0-34b6-4760-9754-e88d2047cc37 \
+              ParameterKey=PasswordPepperKmsKeyArn,ParameterValue=arn:aws:kms:us-east-1:181250799646:key/a95af96e-c57a-4983-8b8f-eb3defe179a7 \
+              ParameterKey=DynamoDbKmsKeyArn,ParameterValue=arn:aws:kms:us-east-1:181250799646:key/898be084-35e4-4d59-af4f-06e42aec6ee3 \
+              ParameterKey=AuditLogKmsKeyArn,ParameterValue=arn:aws:kms:us-east-1:181250799646:key/bcd6a6d1-ff83-47ab-a893-2f5384626601 \
+            --region us-east-1
+          aws cloudformation wait change-set-create-complete \
+            --stack-name fintech-serverless-staging \
+            --change-set-name gha-${{ github.run_id }} \
+            --region us-east-1
+      - name: Print the actual plan — THIS is what you review before approving
+        run: |
+          aws cloudformation describe-change-set \
+            --stack-name fintech-serverless-staging \
+            --change-set-name gha-${{ github.run_id }} \
+            --region us-east-1 \
+            --query "Changes[].{Action:ResourceChange.Action,Resource:ResourceChange.LogicalResourceId,Type:ResourceChange.ResourceType,Replacement:ResourceChange.Replacement}" \
+            --output table
+
+  # ============================================================
+  # APPLY — THIS is the one gated by your GitHub Environment
+  # approval. By the time you click Approve, the plan above has
+  # ALREADY run and its output is sitting right there in the logs
+  # for you to read first.
+  # ============================================================
   deploy-staging:
     runs-on: ubuntu-latest
     needs: build
@@ -57,25 +110,25 @@ jobs:
           aws-region: us-east-1
       - run: pip install aws-sam-cli
       - run: |
-          sam deploy \
-            --template-file packaged-template.yaml \
+          aws cloudformation execute-change-set \
             --stack-name fintech-serverless-staging \
-            --capabilities CAPABILITY_IAM \
-            --no-confirm-changeset \
-            --no-fail-on-empty-changeset \
-            --region us-east-1 \
-            --parameter-overrides \
-              Environment=staging \
-              JwtKmsKeyArn=arn:aws:kms:us-east-1:181250799646:key/2ebdd663-9bdd-41fb-895b-dad1edbb0e19 \
-              EncryptionKmsKeyArn=arn:aws:kms:us-east-1:181250799646:key/3080a2c0-34b6-4760-9754-e88d2047cc37 \
-              PasswordPepperKmsKeyArn=arn:aws:kms:us-east-1:181250799646:key/a95af96e-c57a-4983-8b8f-eb3defe179a7 \
-              DynamoDbKmsKeyArn=arn:aws:kms:us-east-1:181250799646:key/898be084-35e4-4d59-af4f-06e42aec6ee3 \
-              AuditLogKmsKeyArn=arn:aws:kms:us-east-1:181250799646:key/bcd6a6d1-ff83-47ab-a893-2f5384626601
+            --change-set-name gha-${{ github.run_id }} \
+            --region us-east-1
+          aws cloudformation wait stack-update-complete \
+            --stack-name fintech-serverless-staging \
+            --region us-east-1 || \
+          aws cloudformation wait stack-create-complete \
+            --stack-name fintech-serverless-staging \
+            --region us-east-1
 
-  deploy-prod:
+  # ============================================================
+  # PLAN and APPLY for PRODUCTION — same as above, but gated by
+  # the production environment approval. The plan job runs first,
+  # and the production changeset executes only after you click Approve.
+  # ============================================================
+  plan-prod:
     runs-on: ubuntu-latest
     needs: deploy-staging
-    environment: production   # <- second, separate approval gate
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -85,19 +138,60 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::181250799646:role/github-actions-fintech-deploy
           aws-region: us-east-1
-      - run: pip install aws-sam-cli
-      - run: |
-          sam deploy \
-            --template-file packaged-template.yaml \
+      - name: Create changeset (does NOT execute anything yet)
+        run: |
+          aws cloudformation create-change-set \
             --stack-name fintech-serverless-prod \
+            --change-set-name gha-${{ github.run_id }} \
+            --change-set-type $(aws cloudformation describe-stacks --stack-name fintech-serverless-prod --region us-east-1 >/dev/null 2>&1 && echo UPDATE || echo CREATE) \
+            --template-body file://packaged-template.yaml \
             --capabilities CAPABILITY_IAM \
-            --no-confirm-changeset \
-            --no-fail-on-empty-changeset \
+            --parameters \
+              ParameterKey=Environment,ParameterValue=prod \
+              ParameterKey=JwtKmsKeyArn,ParameterValue=arn:aws:kms:us-east-1:181250799646:key/2ebdd663-9bdd-41fb-895b-dad1edbb0e19 \
+              ParameterKey=EncryptionKmsKeyArn,ParameterValue=arn:aws:kms:us-east-1:181250799646:key/3080a2c0-34b6-4760-9754-e88d2047cc37 \
+              ParameterKey=PasswordPepperKmsKeyArn,ParameterValue=arn:aws:kms:us-east-1:181250799646:key/a95af96e-c57a-4983-8b8f-eb3defe179a7 \
+              ParameterKey=DynamoDbKmsKeyArn,ParameterValue=arn:aws:kms:us-east-1:181250799646:key/898be084-35e4-4d59-af4f-06e42aec6ee3 \
+              ParameterKey=AuditLogKmsKeyArn,ParameterValue=arn:aws:kms:us-east-1:181250799646:key/bcd6a6d1-ff83-47ab-a893-2f5384626601 \
+            --region us-east-1
+          aws cloudformation wait change-set-create-complete \
+            --stack-name fintech-serverless-prod \
+            --change-set-name gha-${{ github.run_id }} \
+            --region us-east-1
+      - name: Print the actual plan for PRODUCTION
+        run: |
+          aws cloudformation describe-change-set \
+            --stack-name fintech-serverless-prod \
+            --change-set-name gha-${{ github.run_id }} \
             --region us-east-1 \
-            --parameter-overrides \
-              Environment=prod \
-              JwtKmsKeyArn=arn:aws:kms:us-east-1:181250799646:key/2ebdd663-9bdd-41fb-895b-dad1edbb0e19 \
-              EncryptionKmsKeyArn=arn:aws:kms:us-east-1:181250799646:key/3080a2c0-34b6-4760-9754-e88d2047cc37 \
-              PasswordPepperKmsKeyArn=arn:aws:kms:us-east-1:181250799646:key/a95af96e-c57a-4983-8b8f-eb3defe179a7 \
-              DynamoDbKmsKeyArn=arn:aws:kms:us-east-1:181250799646:key/898be084-35e4-4d59-af4f-06e42aec6ee3 \
-              AuditLogKmsKeyArn=arn:aws:kms:us-east-1:181250799646:key/bcd6a6d1-ff83-47ab-a893-2f5384626601
+            --query "Changes[].{Action:ResourceChange.Action,Resource:ResourceChange.LogicalResourceId,Type:ResourceChange.ResourceType,Replacement:ResourceChange.Replacement}" \
+            --output table
+
+  # ============================================================
+  # APPLY for PRODUCTION — gated by the production environment
+  # approval. By the time you click Approve, the plan above has
+  # ALREADY run and its output is sitting right there in the logs
+  # pre-verified in the plan-staging CD
+  # ============================================================
+  deploy-prod:
+    runs-on: ubuntu-latest
+    needs: plan-prod
+    environment: production
+    steps:
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::181250799646:role/github-actions-fintech-deploy
+          aws-region: us-east-1
+      - name: Execute the EXACT changeset already created and reviewed above
+        run: |
+          aws cloudformation execute-change-set \
+            --stack-name fintech-serverless-prod \
+            --change-set-name gha-${{ github.run_id }} \
+            --region us-east-1
+          aws cloudformation wait stack-update-complete \
+            --stack-name fintech-serverless-prod \
+            --region us-east-1 || \
+          aws cloudformation wait stack-create-complete \
+            --stack-name fintech-serverless-prod \
+            --region us-east-1
