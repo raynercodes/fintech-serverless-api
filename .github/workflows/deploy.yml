@@ -98,7 +98,7 @@ jobs:
           REASON=$(aws cloudformation describe-change-set --stack-name fintech-serverless-staging --change-set-name gha-${{ github.run_id }} --region us-east-1 --query "StatusReason" --output text)
 
           if [ "$STATUS" == "FAILED" ]; then
-            if [[ "$REASON" == *"didn't contain changes"* ]]; then
+            if [[ "$REASON" == *"didn't contain changes"* ]] || [[ "$REASON" == *"No updates are to be performed"* ]]; then
               echo "No changes detected — staging already matches this template. Nothing to deploy."
               echo "has_changes=false" >> "$GITHUB_OUTPUT"
               aws cloudformation delete-change-set --stack-name fintech-serverless-staging --change-set-name gha-${{ github.run_id }} --region us-east-1
@@ -226,8 +226,8 @@ jobs:
           REASON=$(aws cloudformation describe-change-set --stack-name fintech-serverless-prod --change-set-name gha-${{ github.run_id }} --region us-east-1 --query "StatusReason" --output text)
 
           if [ "$STATUS" == "FAILED" ]; then
-            if [[ "$REASON" == *"didn't contain changes"* ]]; then
-              echo "No changes detected — staging already matches this template. Nothing to deploy."
+            if [[ "$REASON" == *"didn't contain changes"* ]] || [[ "$REASON" == *"No updates are to be performed"* ]]; then
+              echo "No changes detected — production already matches this template. Nothing to deploy."
               echo "has_changes=false" >> "$GITHUB_OUTPUT"
               aws cloudformation delete-change-set --stack-name fintech-serverless-prod --change-set-name gha-${{ github.run_id }} --region us-east-1
             else
@@ -257,7 +257,7 @@ jobs:
   # APPLY for PRODUCTION — gated by the production environment
   # approval. By the time you click Approve, the plan above has
   # ALREADY run and its output is sitting right there in the logs
-  # pre-verified in the plan-staging CD
+  # pre-verified in the plan-prod CD
   # ============================================================
   deploy-prod:
     runs-on: ubuntu-latest
