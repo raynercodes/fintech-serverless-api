@@ -59,6 +59,8 @@ Resources:
                   - cloudformation:DescribeChangeSet
                   - cloudformation:GetTemplate
                   - cloudformation:ValidateTemplate
+                  - cloudformation:ListChangeSets
+                  - cloudformation:DeleteStack
                 Resource: '*'
               - Effect: Allow
                 Action:
@@ -70,15 +72,22 @@ Resources:
                   - logs:*
                   - cloudwatch:*
                   - codedeploy:*
+                  - events:*
+                  - acm:*
+                  - cloudfront:*
                   - kms:Decrypt
                   - kms:GenerateDataKey
                   - kms:DescribeKey
+                  - kms:CreateGrant
                 Resource: '*'
               - Effect: Allow
                 Action:
                   - iam:CreateRole
                   - iam:DeleteRole
                   - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
                   - iam:PutRolePolicy
                   - iam:DeleteRolePolicy
                   - iam:AttachRolePolicy
