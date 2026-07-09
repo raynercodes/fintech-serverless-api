@@ -110,6 +110,7 @@ jobs:
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi
       - name: Print the actual plan — THIS is what you review before approving
+        if: steps.create-changeset.outputs.has_changes == 'true'
         run: |
           aws cloudformation describe-change-set \
             --stack-name fintech-serverless-staging \
@@ -238,6 +239,7 @@ jobs:
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi
       - name: Print the actual plan for PRODUCTION
+        if: steps.create-changeset.outputs.has_changes == 'true'
         run: |
           aws cloudformation describe-change-set \
             --stack-name fintech-serverless-prod \
