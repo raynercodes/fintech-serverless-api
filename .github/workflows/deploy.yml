@@ -51,6 +51,8 @@ jobs:
   plan-staging:
     runs-on: ubuntu-latest
     needs: build
+    outputs:
+      changeset_type: ${{ steps.changeset-type.outputs.type }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -113,30 +115,27 @@ jobs:
   # ============================================================
   deploy-staging:
     runs-on: ubuntu-latest
-    needs: build
+    needs: plan-staging
     if: success()
     environment: staging   # <- this is what makes GitHub pause for approval
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: packaged-template
       - name: Configure AWS credentials via OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::181250799646:role/github-actions-fintech-deploy
           aws-region: us-east-1
-      - run: pip install aws-sam-cli
-      - run: |
+      - name: Execute the EXACT changeset already created and reviewed above
+        run: |
           aws cloudformation execute-change-set \
             --stack-name fintech-serverless-staging \
             --change-set-name gha-${{ github.run_id }} \
             --region us-east-1
-          aws cloudformation wait stack-update-complete \
-            --stack-name fintech-serverless-staging \
-            --region us-east-1 || \
-          aws cloudformation wait stack-create-complete \
-            --stack-name fintech-serverless-staging \
-            --region us-east-1
+
+          if [ "${{ needs.plan-staging.outputs.changeset_type }}" == "CREATE" ]; then
+            aws cloudformation wait stack-create-complete --stack-name fintech-serverless-staging --region us-east-1
+          else
+            aws cloudformation wait stack-update-complete --stack-name fintech-serverless-staging --region us-east-1
+          fi
 
   # ============================================================
   # PLAN and APPLY for PRODUCTION — same as above, but gated by
@@ -146,6 +145,8 @@ jobs:
   plan-prod:
     runs-on: ubuntu-latest
     needs: deploy-staging
+    outputs:
+      changeset_type: ${{ steps.changeset-type.outputs.type }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -223,9 +224,9 @@ jobs:
             --stack-name fintech-serverless-prod \
             --change-set-name gha-${{ github.run_id }} \
             --region us-east-1
-          aws cloudformation wait stack-update-complete \
-            --stack-name fintech-serverless-prod \
-            --region us-east-1 || \
-          aws cloudformation wait stack-create-complete \
-            --stack-name fintech-serverless-prod \
-            --region us-east-1
+
+          if [ "${{ needs.plan-prod.outputs.changeset_type }}" == "CREATE" ]; then
+            aws cloudformation wait stack-create-complete --stack-name fintech-serverless-prod --region us-east-1
+          else
+            aws cloudformation wait stack-update-complete --stack-name fintech-serverless-prod --region us-east-1
+          fi
