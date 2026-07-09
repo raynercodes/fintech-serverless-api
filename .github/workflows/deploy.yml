@@ -53,6 +53,7 @@ jobs:
     needs: build
     outputs:
       changeset_type: ${{ steps.changeset-type.outputs.type }}
+      has_changes: ${{ steps.create-changeset.outputs.has_changes }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -87,10 +88,27 @@ jobs:
               ParameterKey=DynamoDbKmsKeyArn,ParameterValue=arn:aws:kms:us-east-1:181250799646:key/898be084-35e4-4d59-af4f-06e42aec6ee3 \
               ParameterKey=AuditLogKmsKeyArn,ParameterValue=arn:aws:kms:us-east-1:181250799646:key/bcd6a6d1-ff83-47ab-a893-2f5384626601 \
             --region us-east-1
+          # So we poll manually and inspect the REASON before deciding.
           aws cloudformation wait change-set-create-complete \
             --stack-name fintech-serverless-staging \
             --change-set-name gha-${{ github.run_id }} \
-            --region us-east-1
+            --region us-east-1 || true
+
+          STATUS=$(aws cloudformation describe-change-set --stack-name fintech-serverless-staging --change-set-name gha-${{ github.run_id }} --region us-east-1 --query "Status" --output text)
+          REASON=$(aws cloudformation describe-change-set --stack-name fintech-serverless-staging --change-set-name gha-${{ github.run_id }} --region us-east-1 --query "StatusReason" --output text)
+
+          if [ "$STATUS" == "FAILED" ]; then
+            if [[ "$REASON" == *"didn't contain changes"* ]]; then
+              echo "No changes detected — staging already matches this template. Nothing to deploy."
+              echo "has_changes=false" >> "$GITHUB_OUTPUT"
+              aws cloudformation delete-change-set --stack-name fintech-serverless-staging --change-set-name gha-${{ github.run_id }} --region us-east-1
+            else
+              echo "Changeset genuinely failed: $REASON"
+              exit 1
+            fi
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Print the actual plan — THIS is what you review before approving
         run: |
           aws cloudformation describe-change-set \
@@ -124,6 +142,22 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::181250799646:role/github-actions-fintech-deploy
           aws-region: us-east-1
+      - name: Execute changeset (only if there are real changes to apply)
+        if: needs.plan-staging.outputs.has_changes == 'true'
+        run: |
+          aws cloudformation execute-change-set \
+            --stack-name fintech-serverless-staging \
+            --change-set-name gha-${{ github.run_id }} \
+            --region us-east-1
+
+          if [ "${{ needs.plan-staging.outputs.changeset_type }}" == "CREATE" ]; then
+            aws cloudformation wait stack-create-complete --stack-name fintech-serverless-staging --region us-east-1
+          else
+            aws cloudformation wait stack-update-complete --stack-name fintech-serverless-staging --region us-east-1
+          fi
+      - name: No changes to deploy
+        if: needs.plan-staging.outputs.has_changes != 'true'
+        run: echo "Staging already matches this template — nothing to deploy this run."
       - name: Execute the EXACT changeset already created and reviewed above
         run: |
           aws cloudformation execute-change-set \
@@ -147,6 +181,7 @@ jobs:
     needs: deploy-staging
     outputs:
       changeset_type: ${{ steps.changeset-type.outputs.type }}
+      has_changes: ${{ steps.create-changeset.outputs.has_changes }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -181,10 +216,27 @@ jobs:
               ParameterKey=DynamoDbKmsKeyArn,ParameterValue=arn:aws:kms:us-east-1:181250799646:key/898be084-35e4-4d59-af4f-06e42aec6ee3 \
               ParameterKey=AuditLogKmsKeyArn,ParameterValue=arn:aws:kms:us-east-1:181250799646:key/bcd6a6d1-ff83-47ab-a893-2f5384626601 \
             --region us-east-1
+          # So we poll manually and inspect the REASON before deciding.
           aws cloudformation wait change-set-create-complete \
             --stack-name fintech-serverless-prod \
             --change-set-name gha-${{ github.run_id }} \
-            --region us-east-1
+            --region us-east-1 || true
+
+          STATUS=$(aws cloudformation describe-change-set --stack-name fintech-serverless-prod --change-set-name gha-${{ github.run_id }} --region us-east-1 --query "Status" --output text)
+          REASON=$(aws cloudformation describe-change-set --stack-name fintech-serverless-prod --change-set-name gha-${{ github.run_id }} --region us-east-1 --query "StatusReason" --output text)
+
+          if [ "$STATUS" == "FAILED" ]; then
+            if [[ "$REASON" == *"didn't contain changes"* ]]; then
+              echo "No changes detected — staging already matches this template. Nothing to deploy."
+              echo "has_changes=false" >> "$GITHUB_OUTPUT"
+              aws cloudformation delete-change-set --stack-name fintech-serverless-prod --change-set-name gha-${{ github.run_id }} --region us-east-1
+            else
+              echo "Changeset genuinely failed: $REASON"
+              exit 1
+            fi
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Print the actual plan for PRODUCTION
         run: |
           aws cloudformation describe-change-set \
@@ -218,6 +270,22 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::181250799646:role/github-actions-fintech-deploy
           aws-region: us-east-1
+      - name: Execute changeset (only if there are real changes to apply)
+        if: needs.plan-prod.outputs.has_changes == 'true'
+        run: |
+          aws cloudformation execute-change-set \
+            --stack-name fintech-serverless-prod \
+            --change-set-name gha-${{ github.run_id }} \
+            --region us-east-1
+
+          if [ "${{ needs.plan-prod.outputs.changeset_type }}" == "CREATE" ]; then
+            aws cloudformation wait stack-create-complete --stack-name fintech-serverless-prod --region us-east-1
+          else
+            aws cloudformation wait stack-update-complete --stack-name fintech-serverless-prod --region us-east-1
+          fi
+      - name: No changes to deploy
+        if: needs.plan-prod.outputs.has_changes != 'true'
+        run: echo "Production already matches this template — nothing to deploy this run."
       - name: Execute the EXACT changeset already created and reviewed above
         run: |
           aws cloudformation execute-change-set \
