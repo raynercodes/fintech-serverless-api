@@ -170,22 +170,6 @@ jobs:
       - name: No changes to deploy
         if: needs.plan-staging.outputs.has_changes != 'true'
         run: echo "Staging already matches this template — nothing to deploy this run."
-      - name: Execute the EXACT changeset already created and reviewed above
-        if: needs.plan-staging.outputs.has_changes == 'true'
-        run: |
-          aws cloudformation execute-change-set \
-            --stack-name fintech-serverless-staging \
-            --change-set-name gha-${{ github.run_id }} \
-            --region us-east-1
-
-          if [ "${{ needs.plan-staging.outputs.changeset_type }}" == "CREATE" ]; then
-            aws cloudformation wait stack-create-complete --stack-name fintech-serverless-staging --region us-east-1
-          else
-            aws cloudformation wait stack-update-complete --stack-name fintech-serverless-staging --region us-east-1
-          fi
-      - name: No changes to deploy
-        if: needs.plan-staging.outputs.has_changes != 'true'
-        run: echo "Staging already matches this template — nothing to deploy this run."
       - name: Print live stack URL
         run: |
           URL=$(aws cloudformation describe-stacks --stack-name fintech-serverless-staging --region us-east-1 --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" --output text)
@@ -316,22 +300,6 @@ jobs:
             else
               aws cloudformation wait stack-update-complete --stack-name fintech-serverless-prod --region us-east-1
             fi
-          fi
-      - name: No changes to deploy
-        if: needs.plan-prod.outputs.has_changes != 'true'
-        run: echo "Production already matches this template — nothing to deploy this run."
-      - name: Execute the EXACT changeset already created and reviewed above
-        if: needs.plan-prod.outputs.has_changes == 'true'
-        run: |
-          aws cloudformation execute-change-set \
-            --stack-name fintech-serverless-prod \
-            --change-set-name gha-${{ github.run_id }} \
-            --region us-east-1
-
-          if [ "${{ needs.plan-prod.outputs.changeset_type }}" == "CREATE" ]; then
-            aws cloudformation wait stack-create-complete --stack-name fintech-serverless-prod --region us-east-1
-          else
-            aws cloudformation wait stack-update-complete --stack-name fintech-serverless-prod --region us-east-1
           fi
       - name: No changes to deploy
         if: needs.plan-prod.outputs.has_changes != 'true'
