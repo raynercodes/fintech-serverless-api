@@ -14,6 +14,10 @@ Parameters:
     AllowedValues: ["true", "false"]
     Description: "Set to true only once AWS has cleared CloudFront account verification"
 
+  RegionalCustomDomainCertArn:
+    Type: String
+    Description: "ACM cert ARN (us-east-1) for the API Gateway Regional custom domain — reuses the existing validated cert"
+
   JwtKmsKeyArn:
     Type: String
     Description: "ARN of the CMK protecting the JWT secret"
@@ -108,6 +112,31 @@ Resources:
     Properties:
       LogGroupName: !Sub /aws/lambda/fintech-backup-${Environment}
       RetentionInDays: 14
+
+  # -------------------------------------------------------
+  # API Gateway Regional Custom Domain — independent of
+  # CloudFront entirely. Gives us a permanent, stable domain
+  # that never changes even if the underlying API Gateway
+  # physical ID gets replaced during future stack recreations.
+  # -------------------------------------------------------
+  FintechRegionalDomainName:
+    Type: AWS::ApiGateway::DomainName
+    Condition: IsProd
+    Properties:
+      DomainName: fintech.raynercodes.dev
+      RegionalCertificateArn: !Ref RegionalCustomDomainCertArn
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      SecurityPolicy: TLS_1_2
+
+  FintechRegionalDomainMapping:
+    Type: AWS::ApiGateway::BasePathMapping
+    Condition: IsProd
+    Properties:
+      DomainName: !Ref FintechRegionalDomainName
+      RestApiId: !Ref FintechApi
+      Stage: !Ref Environment
 
   # -------------------------------------------------------
   # SQS FIFO Dead Letter Queue
@@ -838,6 +867,12 @@ Outputs:
     Value: !Sub https://${FintechApi}.execute-api.us-east-1.amazonaws.com/${Environment}
     Export:
       Name: !Sub fintech-api-url-${Environment}
+
+  RegionalDomainTarget:
+    Condition: IsProd
+    Value: !GetAtt FintechRegionalDomainName.RegionalDomainName
+    Export:
+      Name: !Sub fintech-regional-domain-target-${Environment}
 
   ApiId:
     Value: !Ref FintechApi

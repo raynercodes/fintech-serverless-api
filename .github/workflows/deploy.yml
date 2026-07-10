@@ -218,6 +218,7 @@ jobs:
             --parameters \
               ParameterKey=Environment,ParameterValue=prod \
               ParameterKey=EnableCloudFront,ParameterValue=false \
+              ParameterKey=RegionalCustomDomainCertArn,ParameterValue=arn:aws:acm:us-east-1:181250799646:certificate/dbbc721d-35e7-4b6f-8ee2-6054db07346b
               ParameterKey=JwtKmsKeyArn,ParameterValue=arn:aws:kms:us-east-1:181250799646:key/2ebdd663-9bdd-41fb-895b-dad1edbb0e19 \
               ParameterKey=EncryptionKmsKeyArn,ParameterValue=arn:aws:kms:us-east-1:181250799646:key/3080a2c0-34b6-4760-9754-e88d2047cc37 \
               ParameterKey=PasswordPepperKmsKeyArn,ParameterValue=arn:aws:kms:us-east-1:181250799646:key/a95af96e-c57a-4983-8b8f-eb3defe179a7 \

@@ -11,4 +11,7 @@ samconfig.toml
 .DS_Store
 env.json
 .vscode/
+.vscode
 pytest.ini
+locust-env/
+package/
