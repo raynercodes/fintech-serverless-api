@@ -179,7 +179,7 @@ jobs:
       - name: Print live stack URL
         run: |
           URL=$(aws cloudformation describe-stacks --stack-name fintech-serverless-staging --region us-east-1 --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" --output text)
-          echo "Staging API is live at: $URL"
+          echo "Staging API is live at: $URL/health"
           echo "Docs: $URL/docs"
 
   # ============================================================
@@ -222,6 +222,7 @@ jobs:
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --parameters \
               ParameterKey=Environment,ParameterValue=prod \
+              ParameterKey=EnableCloudFront,ParameterValue=false \
               ParameterKey=JwtKmsKeyArn,ParameterValue=arn:aws:kms:us-east-1:181250799646:key/2ebdd663-9bdd-41fb-895b-dad1edbb0e19 \
               ParameterKey=EncryptionKmsKeyArn,ParameterValue=arn:aws:kms:us-east-1:181250799646:key/3080a2c0-34b6-4760-9754-e88d2047cc37 \
               ParameterKey=PasswordPepperKmsKeyArn,ParameterValue=arn:aws:kms:us-east-1:181250799646:key/a95af96e-c57a-4983-8b8f-eb3defe179a7 \
@@ -318,5 +319,5 @@ jobs:
       - name: Print live stack URL
         run: |
           URL=$(aws cloudformation describe-stacks --stack-name fintech-serverless-prod --region us-east-1 --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" --output text)
-          echo "Production API is live at: $URL"
+          echo "Production API is live at: $URL/health"
           echo "Docs: $URL/docs"

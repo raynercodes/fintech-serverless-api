@@ -1,5 +1,6 @@
 import os
 
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "dev")
 
 def get_health_status() -> dict:
     """
@@ -12,7 +13,7 @@ def get_health_status() -> dict:
         "status": "healthy",
         "service": "Fintech Serverless Loan Lending Platform",
         "version": os.environ.get("APP_VERSION", "1.0.0"),
-        "environment": os.environ.get("ENVIRONMENT", "dev"),
+        "environment": ENVIRONMENT,
         "author": {
             "name": "Leonardo Rayner",
             "github": "github.com/raynercodes",
@@ -34,14 +35,14 @@ def get_health_status() -> dict:
             "maintenance": "EventBridge CRON — automated cleanup and backups"
         },
         "links": {
-            "interactive docs": "https://pw4kfpuw3f.execute-api.us-east-1.amazonaws.com/dev/docs",
+            "interactive docs": f"https://pw4kfpuw3f.execute-api.us-east-1.amazonaws.com/{ENVIRONMENT}/docs",
             "github": "github.com/raynercodes/fintech-serverless-api",
             "portfolio": "raynercodes.dev"
         },
         "instructions": {
-            "step_1": "GET /dev/health — you are here",
+            "step_1": f"GET /{ENVIRONMENT}/health — you are here",
             "step_2": "copy the link below and paste it into your browser to access the interactive docs to test endpoints in a sandbox UI",
-            "docs": "https://pw4kfpuw3f.execute-api.us-east-1.amazonaws.com/dev/docs",
+            "docs": f"https://pw4kfpuw3f.execute-api.us-east-1.amazonaws.com/{ENVIRONMENT}/docs",
             "Disclaimer": "Docs have examples and instructions for each endpoint — always refer back to the Steps at the top of the page when stuck — Thanks for testing!"
         }
     }

@@ -57,7 +57,7 @@ Tokens expire in **15 minutes** — hit `/auth/demo` again for a fresh one.
     version="1.0.0",
     contact={
         "name": "Leonardo Rayner",
-        "url": "https://pw4kfpuw3f.execute-api.us-east-1.amazonaws.com/dev/health",
+        "url": f"https://pw4kfpuw3f.execute-api.us-east-1.amazonaws.com/{ENVIRONMENT}/health",
         "email": "raynercodes@gmail.com",
         "LinkedIn": "https://www.linkedin.com/in/leonardo-rayner-raynercodes/",
     },

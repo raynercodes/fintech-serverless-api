@@ -8,6 +8,12 @@ Parameters:
     # Default: dev
     AllowedValues: [dev, staging, prod]
 
+  EnableCloudFront:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: "Set to true only once AWS has cleared CloudFront account verification"
+
   JwtKmsKeyArn:
     Type: String
     Description: "ARN of the CMK protecting the JWT secret"
@@ -30,6 +36,7 @@ Parameters:
 
 Conditions:
   IsProd: !Equals [!Ref Environment, "prod"]
+  DeployCloudFront: !And [!Condition IsProd, !Equals [!Ref EnableCloudFront, "true"]]
 
 Globals:
   Function:
@@ -740,7 +747,7 @@ Resources:
   # -------------------------------------------------------
   FintechCloudFrontDistribution:
     Type: AWS::CloudFront::Distribution
-    Condition: IsProd
+    Condition: DeployCloudFront
     Properties:
       DistributionConfig:
         Enabled: true
@@ -798,7 +805,7 @@ Resources:
   # -------------------------------------------------------
   FintechCertificate:
     Type: AWS::CertificateManager::Certificate
-    Condition: IsProd
+    Condition: DeployCloudFront
     DeletionPolicy: Retain
     Properties:
       DomainName: fintech.raynercodes.dev
