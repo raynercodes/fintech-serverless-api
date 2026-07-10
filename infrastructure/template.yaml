@@ -386,7 +386,7 @@ Resources:
       Tracing: Active
       AutoPublishAlias: !Ref Environment
       DeploymentPreference:
-        Type: AllAtOnce # Canary10Percent15Minutes
+        Type: Canary10Percent15Minutes #AllAtOnce
         Role: !GetAtt FintechCodeDeployServiceRole.Arn
         Hooks:
           PreTraffic: !Ref FintechValidateDeploymentFunction

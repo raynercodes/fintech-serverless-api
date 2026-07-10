@@ -2,8 +2,8 @@
 
 A serverless small business loan lending platform built on AWS Lambda, DynamoDB, and SQS FIFO — modeled after real fintech infrastructure (Kapitus-inspired). Built to demonstrate production-grade serverless architecture, NoSQL data modeling, and compliance-aware system design.
 
-**Live API:** `https://pw4kfpuw3f.execute-api.us-east-1.amazonaws.com/dev`
-**Interactive Docs:** `https://pw4kfpuw3f.execute-api.us-east-1.amazonaws.com/dev/docs`
+**Live API:** `https://cmxeua8pm3.execute-api.us-east-1.amazonaws.com/prod`
+**Interactive Docs:** `https://cmxeua8pm3.execute-api.us-east-1.amazonaws.com/prod/docs`
 **Author:** [Leonardo Rayner](https://raynercodes.dev) — [GitHub](https://github.com/raynercodes) · [LinkedIn](https://linkedin.com/in/leonardo-rayner-raynercodes/)
 
 ---
@@ -141,13 +141,14 @@ pytest tests/ -v
 
 ## Deployment
 
+Local dev deploys directly for fast iteration:
 ```bash
 cp -r src ./package/
 sam build --template infrastructure/template.yaml --no-cached
 sam deploy --parameter-overrides Environment=dev
 ```
 
-Dev deploys directly for fast local iteration. Staging and production are gated behind a CodePipeline with mandatory manual approval — mirroring how a regulated financial platform would actually control changes to customer-facing infrastructure.
+Staging and production deploy through a GitHub Actions pipeline (`.github/workflows/deploy.yml`): `test` → `build` → a visible CloudFormation changeset plan → a gated manual approval (via GitHub Environments with required reviewers) → apply. Every promotion to staging or production requires an explicit human approval before anything executes — the plan is generated and printed first, so the reviewer sees the exact diff before approving. Authentication to AWS uses OIDC federation; no long-lived AWS credentials are stored in GitHub.
 
 ---
 
@@ -155,17 +156,17 @@ Dev deploys directly for fast local iteration. Staging and production are gated 
 
 Being upfront about what's still moving:
 
-- **Custom domain (`fintech.raynercodes.dev`) via CloudFront** — ACM certificate is issued and validated; CloudFront distribution creation is currently blocked on an AWS account verification review (submitted, awaiting AWS response — standard for newer AWS accounts, not a configuration issue)
-- **Full CI/CD pipeline run through production** — pipeline is built and has been validated through the staging deploy stage; the CodeBuild stage is currently blocked by an AWS account-level build-queue limit (support case open)
-- **1,000-concurrent-user load test with Locust** — locustfile is built and validated at small scale; the full run is blocked on a Lambda concurrent-execution quota increase (default account limit is well below what's needed; quota increase requested)
-- Merge `dev` → `main` once the above clear and a full production deploy is confirmed stable
+- **Custom domain (`fintech.raynercodes.dev`) via CloudFront** — ACM certificate validation and CloudFront distribution creation are isolated behind an `EnableCloudFront` toggle in the template, currently disabled. AWS's account verification review for CloudFront is still open (support case filed, no published SLA) — but this is deliberately decoupled from the rest of production, so the API itself runs fully live and stable in the meantime. Flipping this on is a small, isolated deploy once the review clears.
+- **1,000-concurrent-user load test with Locust** — locustfile is built and validated at small scale; the full run is blocked on a Lambda concurrent-execution quota increase (default account limit is well below what's needed; quota increase requested, still pending)
+- Original plan called for AWS CodePipeline/CodeBuild for CD orchestration; pivoted to a GitHub Actions-native pipeline after CodeBuild's account-level build-queue quota was denied (see Non-Implemented section) — the GitHub Actions version is fully built, tested, and has completed real promotions through staging and production
 
-These are all real AWS account-level reviews with no published SLA — not application bugs. Support cases are open and being tracked.
+These are real AWS account-level reviews with no published SLA — not application bugs. Support cases are open and being tracked.
 
 ---
 
 ## Non-Implemented / Deliberate Scope Decisions
 
+- **AWS CodePipeline / CodeBuild** — originally built for CI/CD orchestration; CodeBuild's account-level build-queue quota was denied by AWS support ("continue building account usage history"). Pivoted to a GitHub Actions-native pipeline instead, using GitHub Environments with required reviewers for manual approval gates and OIDC federation for AWS auth — a legitimate, widely-used alternative pattern that sidesteps the account limitation entirely rather than waiting on it
 - **AWS Cognito** — skipped in favor of a custom JWT implementation, to demonstrate deeper auth mechanics
 - **ElastiCache / Redis** — skipped; a 3-tier cache (CloudFront edge → Lambda execution context → DynamoDB cache table) covers the same need at zero idle cost
 - **API Gateway stage caching** — skipped; billed hourly regardless of traffic, conflicts with serverless pay-per-use design
