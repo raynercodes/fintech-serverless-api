@@ -1,7 +1,5 @@
 import os
 
-ENVIRONMENT = os.environ.get("ENVIRONMENT", "dev")
-
 def get_health_status() -> dict:
     """
     Pulled into core/ anyway to match the thin-route convention used
@@ -9,10 +7,14 @@ def get_health_status() -> dict:
     I/O being separated out here — just keeping routes consistently
     thin across the whole project.
     """
+    BASE_URL = os.environ.get("PUBLIC_BASE_URL", "")
+    ENVIRONMENT = os.environ.get("ENVIRONMENT", "dev")
+    VERSION = os.environ.get("APP_VERSION", "1.0.0")
+    
     return {
         "status": "healthy",
         "service": "Fintech Serverless Loan Lending Platform",
-        "version": os.environ.get("APP_VERSION", "1.0.0"),
+        "version": VERSION,
         "environment": ENVIRONMENT,
         "author": {
             "name": "Leonardo Rayner",
@@ -35,14 +37,14 @@ def get_health_status() -> dict:
             "maintenance": "EventBridge CRON — automated cleanup and backups"
         },
         "links": {
-            "interactive docs": f"https://pw4kfpuw3f.execute-api.us-east-1.amazonaws.com/{ENVIRONMENT}/docs",
+            "interactive docs": f"{BASE_URL}/docs",
             "github": "github.com/raynercodes/fintech-serverless-api",
             "portfolio": "raynercodes.dev"
         },
         "instructions": {
-            "step_1": f"GET /{ENVIRONMENT}/health — you are here",
+            "step_1": f"GET /{BASE_URL}/health — you are here",
             "step_2": "copy the link below and paste it into your browser to access the interactive docs to test endpoints in a sandbox UI",
-            "docs": f"https://pw4kfpuw3f.execute-api.us-east-1.amazonaws.com/{ENVIRONMENT}/docs",
+            "docs": f"{BASE_URL}/docs",
             "Disclaimer": "Docs have examples and instructions for each endpoint — always refer back to the Steps at the top of the page when stuck — Thanks for testing!"
         }
     }

@@ -6,6 +6,7 @@ from src.api.routes import loans, health, auth
 
 APP_VERSION = os.environ.get("APP_VERSION", "1.0.0")
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "dev")
+BASE_URL = os.environ.get("PUBLIC_BASE_URL", "")
 
 # Declares the Bearer auth scheme so Swagger UI renders the Authorize button
 # Actual enforcement happens at the Lambda Authorizer — this is documentation only
@@ -57,7 +58,7 @@ Tokens expire in **15 minutes** — hit `/auth/demo` again for a fresh one.
     version="1.0.0",
     contact={
         "name": "Leonardo Rayner",
-        "url": f"https://pw4kfpuw3f.execute-api.us-east-1.amazonaws.com/{ENVIRONMENT}/health",
+        "url": f"{BASE_URL}/health",
         "email": "raynercodes@gmail.com",
         "LinkedIn": "https://www.linkedin.com/in/leonardo-rayner-raynercodes/",
     },
