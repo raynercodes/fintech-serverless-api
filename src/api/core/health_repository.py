@@ -1,14 +1,24 @@
 import os
+from fastapi import Request
 
-def get_health_status() -> dict:
+def get_health_status(request: Request = None) -> dict:
     """
     Pulled into core/ anyway to match the thin-route convention used
     everywhere else, even though (unlike loans/auth) there's no real
     I/O being separated out here — just keeping routes consistently
     thin across the whole project.
     """
-    BASE_URL = os.environ.get("PUBLIC_BASE_URL", "")
     ENVIRONMENT = os.environ.get("ENVIRONMENT", "dev")
+    if ENVIRONMENT == "prod":
+        BASE_URL = os.environ.get("PROD_CUSTOM_DOMAIN", "").rstrip("/")
+    elif request is not None:
+        # Mangum + FastAPI's root_path already correctly reflects
+        # whatever domain/stage the request ACTUALLY came in on —
+        # no CloudFormation reference needed, always accurate, and
+        # self-updating even if the API ID ever changes again
+        BASE_URL = str(request.base_url).rstrip("/")
+    else:
+        BASE_URL = "" # fallback for local dev/testing, no request context available
     VERSION = os.environ.get("APP_VERSION", "1.0.0")
     
     return {

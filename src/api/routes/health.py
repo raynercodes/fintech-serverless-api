@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 import json
 
@@ -17,5 +17,5 @@ class PrettyJSONResponse(JSONResponse):
 router = APIRouter()
 
 @router.get("/health", tags=["health"], response_class=PrettyJSONResponse)
-def health_check():
-    return get_health_status()
+def health_check(request: Request):
+    return get_health_status(request)
