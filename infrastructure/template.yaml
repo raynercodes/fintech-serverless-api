@@ -16,6 +16,7 @@ Parameters:
 
   RegionalCustomDomainCertArn:
     Type: String
+    Default: ""
     Description: "ACM cert ARN (us-east-1) for the API Gateway Regional custom domain — reuses the existing validated cert"
 
   JwtKmsKeyArn:
