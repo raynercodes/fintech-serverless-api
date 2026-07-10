@@ -147,15 +147,25 @@ jobs:
       - name: Execute changeset (only if there are real changes to apply)
         if: needs.plan-staging.outputs.has_changes == 'true'
         run: |
-          aws cloudformation execute-change-set \
+          EXEC_STATUS=$(aws cloudformation describe-change-set \
             --stack-name fintech-serverless-staging \
             --change-set-name gha-${{ github.run_id }} \
-            --region us-east-1
+            --region us-east-1 \
+            --query "ExecutionStatus" --output text)
 
-          if [ "${{ needs.plan-staging.outputs.changeset_type }}" == "CREATE" ]; then
-            aws cloudformation wait stack-create-complete --stack-name fintech-serverless-staging --region us-east-1
+          if [ "$EXEC_STATUS" == "EXECUTE_COMPLETE" ]; then
+            echo "This changeset already executed successfully — likely a duplicate job dispatch during GitHub's recent instability. Staging is already up to date, nothing more to do."
           else
-            aws cloudformation wait stack-update-complete --stack-name fintech-serverless-staging --region us-east-1
+            aws cloudformation execute-change-set \
+              --stack-name fintech-serverless-staging \
+              --change-set-name gha-${{ github.run_id }} \
+              --region us-east-1
+
+            if [ "${{ needs.plan-staging.outputs.changeset_type }}" == "CREATE" ]; then
+              aws cloudformation wait stack-create-complete --stack-name fintech-serverless-staging --region us-east-1
+            else
+              aws cloudformation wait stack-update-complete --stack-name fintech-serverless-staging --region us-east-1
+            fi
           fi
       - name: No changes to deploy
         if: needs.plan-staging.outputs.has_changes != 'true'
@@ -287,15 +297,25 @@ jobs:
       - name: Execute changeset (only if there are real changes to apply)
         if: needs.plan-prod.outputs.has_changes == 'true'
         run: |
-          aws cloudformation execute-change-set \
+          EXEC_STATUS=$(aws cloudformation describe-change-set \
             --stack-name fintech-serverless-prod \
             --change-set-name gha-${{ github.run_id }} \
-            --region us-east-1
+            --region us-east-1 \
+            --query "ExecutionStatus" --output text)
 
-          if [ "${{ needs.plan-prod.outputs.changeset_type }}" == "CREATE" ]; then
-            aws cloudformation wait stack-create-complete --stack-name fintech-serverless-prod --region us-east-1
+          if [ "$EXEC_STATUS" == "EXECUTE_COMPLETE" ]; then
+            echo "This changeset already executed successfully — likely a duplicate job dispatch during GitHub's recent instability. Production is already up to date, nothing more to do."
           else
-            aws cloudformation wait stack-update-complete --stack-name fintech-serverless-prod --region us-east-1
+            aws cloudformation execute-change-set \
+              --stack-name fintech-serverless-prod \
+              --change-set-name gha-${{ github.run_id }} \
+              --region us-east-1
+
+            if [ "${{ needs.plan-prod.outputs.changeset_type }}" == "CREATE" ]; then
+              aws cloudformation wait stack-create-complete --stack-name fintech-serverless-prod --region us-east-1
+            else
+              aws cloudformation wait stack-update-complete --stack-name fintech-serverless-prod --region us-east-1
+            fi
           fi
       - name: No changes to deploy
         if: needs.plan-prod.outputs.has_changes != 'true'

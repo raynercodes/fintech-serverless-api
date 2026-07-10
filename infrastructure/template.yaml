@@ -880,13 +880,13 @@ Outputs:
       Name: !Sub fintech-dlq-arn-${Environment}
 
   CertificateArn:
-    Condition: IsProd
+    Condition: DeployCloudFront
     Value: !Ref FintechCertificate
     Export:
       Name: !Sub fintech-certificate-arn-${Environment}
 
   CloudFrontDomainName:
-    Condition: IsProd
+    Condition: DeployCloudFront
     Value: !GetAtt FintechCloudFrontDistribution.DomainName
     Export:
       Name: !Sub fintech-cloudfront-domain-${Environment}
