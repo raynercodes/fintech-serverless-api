@@ -73,6 +73,7 @@ jobs:
             echo "type=UPDATE" >> "$GITHUB_OUTPUT"
           fi
       - name: Create changeset (does NOT execute anything yet)
+        id: create-changeset
         run: |
           aws cloudformation create-change-set \
             --stack-name fintech-serverless-staging \
@@ -175,6 +176,11 @@ jobs:
       - name: No changes to deploy
         if: needs.plan-staging.outputs.has_changes != 'true'
         run: echo "Staging already matches this template — nothing to deploy this run."
+      - name: Print live stack URL
+        run: |
+          URL=$(aws cloudformation describe-stacks --stack-name fintech-serverless-staging --region us-east-1 --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" --output text)
+          echo "Staging API is live at: $URL"
+          echo "Docs: $URL/docs"
 
   # ============================================================
   # PLAN and APPLY for PRODUCTION — same as above, but gated by
@@ -206,6 +212,7 @@ jobs:
             echo "type=UPDATE" >> "$GITHUB_OUTPUT"
           fi
       - name: Create changeset (does NOT execute anything yet)
+        id: create-changeset
         run: |
           aws cloudformation create-change-set \
             --stack-name fintech-serverless-prod \
@@ -308,3 +315,8 @@ jobs:
       - name: No changes to deploy
         if: needs.plan-prod.outputs.has_changes != 'true'
         run: echo "Production already matches this template — nothing to deploy this run."
+      - name: Print live stack URL
+        run: |
+          URL=$(aws cloudformation describe-stacks --stack-name fintech-serverless-prod --region us-east-1 --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" --output text)
+          echo "Production API is live at: $URL"
+          echo "Docs: $URL/docs"
