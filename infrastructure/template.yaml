@@ -59,6 +59,7 @@ Globals:
         AUDIT_LOG_BUCKET_NAME: !Ref FintechAuditLogBucket
         APP_VERSION: "1.0.0"
         PROD_CUSTOM_DOMAIN: "https://fintech.raynercodes.dev"
+        ROOT_PATH: !If [IsProd, "", !Sub "/${Environment}"]
 
 Resources:
 
