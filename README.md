@@ -2,8 +2,8 @@
 
 A serverless small business loan lending platform built on AWS Lambda, DynamoDB, and SQS FIFO — modeled after real fintech infrastructure (Kapitus-inspired). Built to demonstrate production-grade serverless architecture, NoSQL data modeling, and compliance-aware system design.
 
-**Live API:** `https://cmxeua8pm3.execute-api.us-east-1.amazonaws.com/prod`
-**Interactive Docs:** `https://cmxeua8pm3.execute-api.us-east-1.amazonaws.com/prod/docs`
+**Live API:** `https://fintech.raynercodes.dev/health`
+**Interactive Docs:** `https://fintech.raynercodes.dev/docs`
 **Author:** [Leonardo Rayner](https://raynercodes.dev) — [GitHub](https://github.com/raynercodes) · [LinkedIn](https://linkedin.com/in/leonardo-rayner-raynercodes/)
 
 ---
