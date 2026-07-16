@@ -37,7 +37,7 @@ SQS FIFO Queue ──→ Lambda Worker ──→ DynamoDB (on-demand)
 **Encryption:** AES-256-GCM on PII, PBKDF2-HMAC-SHA256 password hashing (600,000 iterations + pepper), separate customer-managed KMS key per secret category
 **Compliance:** S3 Object Lock (COMPLIANCE mode, 3-year retention) — tamper-proof audit trail of every loan lifecycle event
 **IaC:** AWS SAM + CloudFormation — single source of truth
-**CI/CD:** GitHub Actions (CI) → CodePipeline (CD) with two manual approval gates before production
+**CI/CD:** GitHub Actions CI/CD — OIDC federation, visible changeset review, manual approval gates before staging and production
 
 ---
 

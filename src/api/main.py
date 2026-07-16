@@ -58,12 +58,13 @@ Tokens expire in **15 minutes** — hit `/auth/demo` again for a fresh one.
     version="1.0.0",
     contact={
         "name": "Leonardo Rayner",
-        "url": f"https://raynercodes.dev",
+        "url": "https://raynercodes.dev",
         "email": "raynercodes@gmail.com",
     },
     root_path=ROOT_PATH
 )
 
+app.openapi()
 app.include_router(health.router)
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(loans.router, prefix="/loans", tags=["loans"])

@@ -6,6 +6,7 @@ from src.api.routes import loans, health, auth
 
 APP_VERSION = os.environ.get("APP_VERSION", "1.0.0")
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "dev")
+ROOT_PATH = os.environ.get("ROOT_PATH", f"/{ENVIRONMENT}")
 
 # Declares the Bearer auth scheme so Swagger UI renders the Authorize button
 # Actual enforcement happens at the Lambda Authorizer — this is documentation only
@@ -57,13 +58,13 @@ Tokens expire in **15 minutes** — hit `/auth/demo` again for a fresh one.
     version="1.0.0",
     contact={
         "name": "Leonardo Rayner",
-        "url": "https://pw4kfpuw3f.execute-api.us-east-1.amazonaws.com/dev/health",
+        "url": "https://raynercodes.dev",
         "email": "raynercodes@gmail.com",
-        "LinkedIn": "https://www.linkedin.com/in/leonardo-rayner-raynercodes/",
     },
-    root_path=f"/{ENVIRONMENT}"
+    root_path=ROOT_PATH
 )
 
+app.openapi()
 app.include_router(health.router)
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(loans.router, prefix="/loans", tags=["loans"])
