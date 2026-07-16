@@ -25,6 +25,11 @@ jobs:
     needs: test
     steps:
       - uses: actions/checkout@v4
+      - name: Compute short version string
+        id: version
+        run: |
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "version=1.0.${{ github.run_number }}+${SHORT_SHA}" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -85,6 +90,7 @@ jobs:
               ParameterKey=Environment,ParameterValue=staging \
               ParameterKey=EnableCloudFront,ParameterValue=false \
               ParameterKey=JwtKmsKeyArn,ParameterValue=arn:aws:kms:us-east-1:181250799646:key/2ebdd663-9bdd-41fb-895b-dad1edbb0e19 \
+              ParameterKey=AppVersion,ParameterValue=${{ needs.build.outputs.app_version }} \
               ParameterKey=EncryptionKmsKeyArn,ParameterValue=arn:aws:kms:us-east-1:181250799646:key/3080a2c0-34b6-4760-9754-e88d2047cc37 \
               ParameterKey=PasswordPepperKmsKeyArn,ParameterValue=arn:aws:kms:us-east-1:181250799646:key/a95af96e-c57a-4983-8b8f-eb3defe179a7 \
               ParameterKey=DynamoDbKmsKeyArn,ParameterValue=arn:aws:kms:us-east-1:181250799646:key/898be084-35e4-4d59-af4f-06e42aec6ee3 \
@@ -219,6 +225,7 @@ jobs:
               ParameterKey=Environment,ParameterValue=prod \
               ParameterKey=EnableCloudFront,ParameterValue=false \
               ParameterKey=RegionalCustomDomainCertArn,ParameterValue=arn:aws:acm:us-east-1:181250799646:certificate/dbbc721d-35e7-4b6f-8ee2-6054db07346b \
+              ParameterKey=AppVersion,ParameterValue=${{ needs.build.outputs.app_version }} \
               ParameterKey=JwtKmsKeyArn,ParameterValue=arn:aws:kms:us-east-1:181250799646:key/2ebdd663-9bdd-41fb-895b-dad1edbb0e19 \
               ParameterKey=EncryptionKmsKeyArn,ParameterValue=arn:aws:kms:us-east-1:181250799646:key/3080a2c0-34b6-4760-9754-e88d2047cc37 \
               ParameterKey=PasswordPepperKmsKeyArn,ParameterValue=arn:aws:kms:us-east-1:181250799646:key/a95af96e-c57a-4983-8b8f-eb3defe179a7 \

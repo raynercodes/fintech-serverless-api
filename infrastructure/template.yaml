@@ -8,6 +8,15 @@ Parameters:
     # Default: dev
     AllowedValues: [dev, staging, prod]
 
+  AppVersion:
+    Type: String
+    Default: "1.0.0"
+
+  AppVersionPrefix:
+    Type: String
+    Default: "1.0"
+    Description: "Manually-bumped semver prefix — update deliberately for significant changes"
+
   EnableCloudFront:
     Type: String
     Default: "false"
@@ -57,7 +66,7 @@ Globals:
         SQS_QUEUE_URL: !Ref FintechTransactionQueue
         FUNCTION_NAME: !Sub fintech-api-${Environment}
         AUDIT_LOG_BUCKET_NAME: !Ref FintechAuditLogBucket
-        APP_VERSION: "1.0.0"
+        APP_VERSION: !Ref AppVersion
         PROD_CUSTOM_DOMAIN: "https://fintech.raynercodes.dev"
         ROOT_PATH: !If [IsProd, "", !Sub "/${Environment}"]
 
