@@ -192,7 +192,7 @@ jobs:
   # ============================================================
   plan-prod:
     runs-on: ubuntu-latest
-    needs: deploy-staging
+    needs: [deploy-staging, build]
     outputs:
       changeset_type: ${{ steps.changeset-type.outputs.type }}
       has_changes: ${{ steps.create-changeset.outputs.has_changes }}
