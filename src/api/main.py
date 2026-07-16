@@ -64,9 +64,9 @@ Tokens expire in **15 minutes** — hit `/auth/demo` again for a fresh one.
     root_path=ROOT_PATH
 )
 
-app.openapi()
 app.include_router(health.router)
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(loans.router, prefix="/loans", tags=["loans"])
+app.openapi()
 
 handler = Mangum(app, lifespan="off")
