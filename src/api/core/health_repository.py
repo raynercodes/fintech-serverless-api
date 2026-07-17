@@ -1,5 +1,14 @@
 import os
+import json
 from fastapi import Request
+
+def _load_version() -> str:
+    version_path = os.path.join(os.path.dirname(__file__), "..", "version.json")
+    try:
+        with open(version_path) as f:
+            return json.load(f)["version"]
+    except Exception:
+        return "1.0.0"
 
 def get_health_status(request: Request = None) -> dict:
     """
@@ -19,7 +28,7 @@ def get_health_status(request: Request = None) -> dict:
         BASE_URL = str(request.base_url).rstrip("/")
     else:
         BASE_URL = "" # fallback for local dev/testing, no request context available
-    VERSION = os.environ.get("APP_VERSION", "1.0.0")
+    VERSION = _load_version()
     
     return {
         "status": "healthy",
