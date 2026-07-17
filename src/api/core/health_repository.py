@@ -1,14 +1,20 @@
 import os
-import json
+import boto3
 from fastapi import Request
 
-def _load_version() -> str:
-    version_path = os.path.join(os.path.dirname(__file__), "..", "version.json")
-    try:
-        with open(version_path) as f:
-            return json.load(f)["version"]
-    except Exception:
-        return "1.0.0"
+_app_version = None
+
+def get_app_version() -> str:
+    global _app_version
+    if _app_version is None:
+        client = boto3.client("ssm", region_name="us-east-1")
+        environment = os.environ.get("ENVIRONMENT", "dev")
+        try:
+            response = client.get_parameter(Name=f"/fintech/{environment}/app-version")
+            _app_version = response["Parameter"]["Value"]
+        except Exception:
+            _app_version = "1.0.0"
+    return _app_version
 
 def get_health_status(request: Request = None) -> dict:
     """
@@ -28,7 +34,7 @@ def get_health_status(request: Request = None) -> dict:
         BASE_URL = str(request.base_url).rstrip("/")
     else:
         BASE_URL = "" # fallback for local dev/testing, no request context available
-    VERSION = _load_version()
+    VERSION = get_app_version()
     
     return {
         "status": "healthy",

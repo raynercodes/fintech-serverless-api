@@ -27,13 +27,12 @@ jobs:
       app_version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-      - name: Compute short version string
+      - name: Compute version string
         id: version
         run: |
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-          echo "version=1.0.${{ github.run_number }}+${SHORT_SHA}"
+          VERSION="1.0.${{ github.run_number }}+${SHORT_SHA}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "{\"version\": \"${VERSION}\"}" > src/api/version.json
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -180,6 +179,15 @@ jobs:
       - name: No changes to deploy
         if: needs.plan-staging.outputs.has_changes != 'true'
         run: echo "Staging already matches this template — nothing to deploy this run."
+      - name: Publish version to SSM Parameter Store
+        if: needs.plan-staging.outputs.has_changes == 'true'
+        run: |
+          aws ssm put-parameter \
+            --name "/fintech/staging/app-version" \
+            --value "${{ needs.build.outputs.app_version }}" \
+            --type String \
+            --overwrite \
+            --region us-east-1
       - name: Print live stack URL
         run: |
           URL=$(aws cloudformation describe-stacks --stack-name fintech-serverless-staging --region us-east-1 --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" --output text)
@@ -315,6 +323,15 @@ jobs:
       - name: No changes to deploy
         if: needs.plan-prod.outputs.has_changes != 'true'
         run: echo "Production already matches this template — nothing to deploy this run."
+      - name: Publish version to SSM Parameter Store
+        if: needs.plan-prod.outputs.has_changes == 'true'
+        run: |
+          aws ssm put-parameter \
+            --name "/fintech/prod/app-version" \
+            --value "${{ needs.build.outputs.app_version }}" \
+            --type String \
+            --overwrite \
+            --region us-east-1
       - name: Print live stack URL
         run: |
           URL=$(aws cloudformation describe-stacks --stack-name fintech-serverless-prod --region us-east-1 --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" --output text)

@@ -102,6 +102,15 @@ Resources:
                   - kms:DescribeKey
                   - kms:CreateGrant
                 Resource: '*'
+              # SSM — write access ONLY to the two app-version parameters
+              # this pipeline is actually responsible for updating. Nothing
+              # else in SSM (future RDS secrets, etc.) is touched by this grant.
+              - Effect: Allow
+                Action:
+                  - ssm:PutParameter
+                Resource:
+                  - !Sub arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/fintech/staging/app-version
+                  - !Sub arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/fintech/prod/app-version
 
 Outputs:
   DeployRoleArn:

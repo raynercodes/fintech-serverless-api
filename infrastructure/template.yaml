@@ -250,6 +250,14 @@ Resources:
                   - kms:Decrypt
                   - kms:GenerateDataKey
                 Resource: '*'
+              # SSM — read-only, scoped to ONLY this environment's own
+              # version parameter. Deliberately narrow so a future RDS
+              # migration (adding db credentials to SSM/Secrets Manager)
+              # never accidentally falls under this same grant.
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                Resource: !Sub arn:aws:ssm:us-east-1:${AWS::AccountId}:parameter/fintech/${Environment}/app-version
               # CodeDeploy — for lifecycle hooks
               - Effect: Allow
                 Action:
