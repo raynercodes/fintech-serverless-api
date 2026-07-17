@@ -180,7 +180,6 @@ jobs:
         if: needs.plan-staging.outputs.has_changes != 'true'
         run: echo "Staging already matches this template — nothing to deploy this run."
       - name: Publish version to SSM Parameter Store
-        if: needs.plan-staging.outputs.has_changes == 'true'
         run: |
           aws ssm put-parameter \
             --name "/fintech/staging/app-version" \
@@ -324,7 +323,6 @@ jobs:
         if: needs.plan-prod.outputs.has_changes != 'true'
         run: echo "Production already matches this template — nothing to deploy this run."
       - name: Publish version to SSM Parameter Store
-        if: needs.plan-prod.outputs.has_changes == 'true'
         run: |
           aws ssm put-parameter \
             --name "/fintech/prod/app-version" \
