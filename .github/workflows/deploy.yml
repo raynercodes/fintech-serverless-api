@@ -144,7 +144,7 @@ jobs:
   # ============================================================
   deploy-staging:
     runs-on: ubuntu-latest
-    needs: plan-staging
+    needs: [plan-staging, build]
     if: success()
     environment: staging   # <- this is what makes GitHub pause for approval
     steps:
@@ -288,7 +288,7 @@ jobs:
   # ============================================================
   deploy-prod:
     runs-on: ubuntu-latest
-    needs: plan-prod
+    needs: [plan-prod, build]
     if: success()
     environment: production
     steps:
