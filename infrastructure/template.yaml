@@ -695,6 +695,47 @@ Resources:
           Value: !Ref Environment
 
   # -------------------------------------------------------
+  # DynamoDB — WebSocket Connection Tracking
+  # Supports two lookup directions: $disconnect only ever
+  # has connection_id, while the Step Functions notify step
+  # only ever has loan_id — same two-directional-lookup shape
+  # as the main Transactions table's account_id/transaction_id
+  # design, solved the same way (GSI).
+  # -------------------------------------------------------
+  FintechWebSocketConnectionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub fintech-websocket-connections-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: !Ref DynamoDbKmsKeyArn
+      AttributeDefinitions:
+        - AttributeName: connection_id
+          AttributeType: S
+        - AttributeName: loan_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: connection_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: loan-id-index
+          KeySchema:
+            - AttributeName: loan_id
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+      Tags:
+        - Key: Project
+          Value: fintech-serverless
+        - Key: Environment
+          Value: !Ref Environment
+
+  # -------------------------------------------------------
   # DynamoDB — Cache Table
   # -------------------------------------------------------
   FintechCacheTable:
@@ -903,6 +944,11 @@ Outputs:
     Value: !GetAtt FintechTransactionsTable.Arn
     Export:
       Name: !Sub fintech-transactions-table-arn-${Environment}
+
+  WebSocketConnectionsTableName:
+    Value: !Ref FintechWebSocketConnectionsTable
+    Export:
+      Name: !Sub fintech-websocket-connections-table-${Environment}
 
   CacheTableName:
     Value: !Ref FintechCacheTable
