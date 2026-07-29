@@ -20,14 +20,6 @@ from src.scheduled.backup_handler import handler as backup_handler, _delete_old_
 
 
 @pytest.fixture
-def aws_credentials():
-    os.environ["AWS_ACCESS_KEY_ID"] = "testing"
-    os.environ["AWS_SECRET_ACCESS_KEY"] = "testing"
-    os.environ["AWS_SECURITY_TOKEN"] = "testing"
-    os.environ["AWS_SESSION_TOKEN"] = "testing"
-
-
-@pytest.fixture
 def dynamodb_tables(aws_credentials):
     with mock_aws():
         dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
@@ -103,7 +95,6 @@ def get_audit_events(s3_client, transaction_id: str) -> list:
 # CLEANUP HANDLER TESTS
 # ============================================================
 
-@mock_aws
 def test_cleanup_flags_stale_pending_loan(dynamodb_tables, audit_log_bucket):
     """The core case — a loan stuck in pending for 25 hours should get flagged."""
     transactions_table, _ = dynamodb_tables
@@ -125,7 +116,6 @@ def test_cleanup_flags_stale_pending_loan(dynamodb_tables, audit_log_bucket):
     assert events[0]["actor"] == "system:cleanup"
 
 
-@mock_aws
 def test_cleanup_does_not_flag_fresh_pending_loan(dynamodb_tables, audit_log_bucket):
     """A loan pending for only a few minutes is completely normal — no flag."""
     transactions_table, _ = dynamodb_tables
@@ -141,7 +131,6 @@ def test_cleanup_does_not_flag_fresh_pending_loan(dynamodb_tables, audit_log_buc
     assert "stale_flagged" not in item
 
 
-@mock_aws
 def test_cleanup_ignores_non_pending_status(dynamodb_tables, audit_log_bucket):
     """An old APPROVED loan isn't stuck — it already moved through the
     lifecycle correctly. Only 'pending' represents something that
@@ -154,7 +143,6 @@ def test_cleanup_ignores_non_pending_status(dynamodb_tables, audit_log_bucket):
     assert result["flagged_count"] == 0
 
 
-@mock_aws
 def test_cleanup_does_not_reflag_already_flagged_loan(dynamodb_tables, audit_log_bucket):
     """Prevents the job from re-flagging (and re-auditing) the same
     stuck item every single day it runs — the FilterExpression excludes
@@ -173,7 +161,6 @@ def test_cleanup_does_not_reflag_already_flagged_loan(dynamodb_tables, audit_log
     assert len(events) == 0
 
 
-@mock_aws
 def test_cleanup_boundary_just_over_threshold(dynamodb_tables, audit_log_bucket):
     """24.1 hours — just past the 24-hour line, should flag."""
     transactions_table, _ = dynamodb_tables
@@ -184,7 +171,6 @@ def test_cleanup_boundary_just_over_threshold(dynamodb_tables, audit_log_bucket)
     assert result["flagged_count"] == 1
 
 
-@mock_aws
 def test_cleanup_boundary_just_under_threshold(dynamodb_tables, audit_log_bucket):
     """23.9 hours — just under the line, should NOT flag. This is the
     off-by-one boundary check, same principle as the credit score tests."""
@@ -196,7 +182,6 @@ def test_cleanup_boundary_just_under_threshold(dynamodb_tables, audit_log_bucket
     assert result["flagged_count"] == 0
 
 
-@mock_aws
 def test_cleanup_flags_multiple_stale_loans_correctly(dynamodb_tables, audit_log_bucket):
     """Confirms flagged_count actually reflects the real number found,
     not just 0 or 1 — and that a fresh item mixed in doesn't get swept up."""
@@ -213,7 +198,6 @@ def test_cleanup_flags_multiple_stale_loans_correctly(dynamodb_tables, audit_log
 # BACKUP HANDLER TESTS
 # ============================================================
 
-@mock_aws
 def test_backup_creates_backups_for_both_tables(dynamodb_tables):
     result = backup_handler({}, None)
 
@@ -222,7 +206,6 @@ def test_backup_creates_backups_for_both_tables(dynamodb_tables):
     assert any("fintech-users-test" in name for name in result["created_backups"])
 
 
-@mock_aws
 def test_backup_naming_includes_backup_marker(dynamodb_tables):
     result = backup_handler({}, None)
     for name in result["created_backups"]:

@@ -26,15 +26,6 @@ from src.api.main import app
 
 client = TestClient(app)
 
-
-@pytest.fixture
-def aws_credentials():
-    os.environ["AWS_ACCESS_KEY_ID"] = "testing"
-    os.environ["AWS_SECRET_ACCESS_KEY"] = "testing"
-    os.environ["AWS_SECURITY_TOKEN"] = "testing"
-    os.environ["AWS_SESSION_TOKEN"] = "testing"
-
-
 @pytest.fixture
 def mock_jwt_secret():
     """
@@ -146,7 +137,6 @@ def dynamodb_tables(aws_credentials):
         yield transactions_table, cache_table
 
 
-@mock_aws
 def test_health_check():
     response = client.get("/health")
     assert response.status_code == 200
@@ -166,7 +156,6 @@ def auth_headers():
     token = jose_jwt.encode(payload, TEST_JWT_SECRET, algorithm="HS256")
     return {"Authorization": f"Bearer {token}"}
 
-@mock_aws
 def test_submit_loan_application(dynamodb_tables, audit_log_bucket, auth_headers):
     with patch("src.api.core.loans_repository.get_sqs") as mock_sqs:
         mock_sqs.return_value.send_message.return_value = {
@@ -200,7 +189,6 @@ def test_submit_loan_application(dynamodb_tables, audit_log_bucket, auth_headers
         assert "timestamp" in data
 
 
-@mock_aws
 def test_submit_loan_invalid_amount(dynamodb_tables, auth_headers):
     with patch("src.api.core.loans_repository.get_sqs"):
         response = client.post(
@@ -217,7 +205,6 @@ def test_submit_loan_invalid_amount(dynamodb_tables, auth_headers):
         assert response.status_code == 422
 
 
-@mock_aws
 def test_submit_loan_invalid_type(dynamodb_tables, auth_headers):
     with patch("src.api.core.loans_repository.get_sqs"):
         response = client.post(
@@ -234,20 +221,17 @@ def test_submit_loan_invalid_type(dynamodb_tables, auth_headers):
         assert response.status_code == 422
 
 
-@mock_aws
 def test_get_loan_not_found(dynamodb_tables, auth_headers):
     response = client.get("/loans/nonexistent-id", headers=auth_headers)
     assert response.status_code == 404
 
 
-@mock_aws
 def test_get_loans_by_account_empty(dynamodb_tables, auth_headers):
     response = client.get("/loans/account/acc_999", headers=auth_headers)
     assert response.status_code == 200
     assert response.json() == []
 
 
-@mock_aws
 def test_get_loans_by_customer_empty(dynamodb_tables, auth_headers):
     response = client.get("/loans/customer/cust_999", headers=auth_headers)
     assert response.status_code == 200
@@ -260,7 +244,6 @@ def test_get_loans_by_customer_empty(dynamodb_tables, auth_headers):
 # bad scores BEFORE they reach SQS or the worker at all.
 # ============================================================
 
-@mock_aws
 def test_submit_loan_credit_score_too_low(dynamodb_tables, auth_headers):
     """A score below 300 isn't a real FICO score — Pydantic should reject it."""
     with patch("src.api.core.loans_repository.get_sqs"):
@@ -278,7 +261,6 @@ def test_submit_loan_credit_score_too_low(dynamodb_tables, auth_headers):
         assert response.status_code == 422
 
 
-@mock_aws
 def test_submit_loan_credit_score_too_high(dynamodb_tables, auth_headers):
     """A score above 850 isn't a real FICO score either — same bouncer, other direction."""
     with patch("src.api.core.loans_repository.get_sqs"):
@@ -296,7 +278,6 @@ def test_submit_loan_credit_score_too_high(dynamodb_tables, auth_headers):
         assert response.status_code == 422
 
 
-@mock_aws
 def test_submit_loan_missing_credit_score(dynamodb_tables, auth_headers):
     """credit_score has no default — leaving it out entirely should 422, not silently pass."""
     with patch("src.api.core.loans_repository.get_sqs"):
@@ -395,7 +376,6 @@ def build_sqs_event(transaction_data: dict) -> dict:
     }
 
 
-@mock_aws
 def test_worker_approves_high_credit_score(dynamodb_tables, audit_log_bucket):
     transactions_table, _ = dynamodb_tables
 
@@ -429,7 +409,6 @@ def test_worker_approves_high_credit_score(dynamodb_tables, audit_log_bucket):
     assert result["Item"]["credit_score"] == 700
 
 
-@mock_aws
 def test_worker_sends_midrange_score_to_review(dynamodb_tables, audit_log_bucket):
     transactions_table, _ = dynamodb_tables
 
@@ -459,7 +438,6 @@ def test_worker_sends_midrange_score_to_review(dynamodb_tables, audit_log_bucket
     assert events[0]["details"]["resulting_status"] == "review"
 
 
-@mock_aws
 def test_worker_rejects_low_credit_score(dynamodb_tables, audit_log_bucket):
     transactions_table, _ = dynamodb_tables
 
@@ -517,7 +495,6 @@ def seed_loan(table, transaction_id: str, account_id: str, status: str, amount: 
     })
 
 
-@mock_aws
 def test_review_loan_can_be_approved(dynamodb_tables, audit_log_bucket, auth_headers):
     transactions_table, _ = dynamodb_tables
     seed_loan(transactions_table, "txn-review-to-approved", "acc_001", "review")
@@ -537,7 +514,6 @@ def test_review_loan_can_be_approved(dynamodb_tables, audit_log_bucket, auth_hea
     assert events[0]["details"]["to_status"] == "approved"
 
 
-@mock_aws
 def test_review_loan_can_be_rejected(dynamodb_tables, audit_log_bucket, auth_headers):
     transactions_table, _ = dynamodb_tables
     seed_loan(transactions_table, "txn-review-to-rejected", "acc_001", "review")
@@ -557,7 +533,6 @@ def test_review_loan_can_be_rejected(dynamodb_tables, audit_log_bucket, auth_hea
     assert events[0]["details"]["to_status"] == "rejected"
 
 
-@mock_aws
 def test_rejected_loan_cannot_be_changed(dynamodb_tables, auth_headers):
     transactions_table, _ = dynamodb_tables
     seed_loan(transactions_table, "txn-final-rejected", "acc_001", "rejected")
@@ -570,7 +545,6 @@ def test_rejected_loan_cannot_be_changed(dynamodb_tables, auth_headers):
     assert response.status_code == 409
 
 
-@mock_aws
 def test_approved_loan_can_move_to_funded(dynamodb_tables, audit_log_bucket, auth_headers):
     transactions_table, _ = dynamodb_tables
     seeded_amount = 5000.00
@@ -598,7 +572,6 @@ def test_approved_loan_can_move_to_funded(dynamodb_tables, audit_log_bucket, aut
     assert disbursed_event["details"]["amount"] == seeded_amount
 
 
-@mock_aws
 def test_approved_loan_cannot_go_back_to_review(dynamodb_tables, auth_headers):
     """This is the rule — approved can only move FORWARD (funded/repaid/defaulted),
     never backward to review/pending/rejected."""
@@ -613,7 +586,6 @@ def test_approved_loan_cannot_go_back_to_review(dynamodb_tables, auth_headers):
     assert response.status_code == 409
 
 
-@mock_aws
 def test_funded_loan_can_be_repaid(dynamodb_tables, audit_log_bucket, auth_headers):
     transactions_table, _ = dynamodb_tables
     seed_loan(transactions_table, "txn-funded-to-repaid", "acc_001", "funded")
@@ -633,7 +605,6 @@ def test_funded_loan_can_be_repaid(dynamodb_tables, audit_log_bucket, auth_heade
     assert events[0]["details"]["to_status"] == "repaid"
 
 
-@mock_aws
 def test_repaid_loan_is_final(dynamodb_tables, auth_headers):
     transactions_table, _ = dynamodb_tables
     seed_loan(transactions_table, "txn-final-repaid", "acc_001", "repaid")
@@ -646,7 +617,6 @@ def test_repaid_loan_is_final(dynamodb_tables, auth_headers):
     assert response.status_code == 409
 
 
-@mock_aws
 def test_defaulted_loan_is_final(dynamodb_tables, auth_headers):
     transactions_table, _ = dynamodb_tables
     seed_loan(transactions_table, "txn-final-defaulted", "acc_001", "defaulted")

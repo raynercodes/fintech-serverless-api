@@ -24,14 +24,6 @@ client = TestClient(app)
 
 
 @pytest.fixture
-def aws_credentials():
-    os.environ["AWS_ACCESS_KEY_ID"] = "testing"
-    os.environ["AWS_SECRET_ACCESS_KEY"] = "testing"
-    os.environ["AWS_SECURITY_TOKEN"] = "testing"
-    os.environ["AWS_SESSION_TOKEN"] = "testing"
-
-
-@pytest.fixture
 def users_table(aws_credentials):
     with mock_aws():
         dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
@@ -45,6 +37,12 @@ def users_table(aws_credentials):
                 {"AttributeName": "email", "KeyType": "HASH"}
             ]
         )
+        cache_table = dynamodb.create_table(
+            TableName="fintech-cache-test",
+            BillingMode="PAY_PER_REQUEST",
+            AttributeDefinitions=[{"AttributeName": "cache_key", "AttributeType": "S"}],
+            KeySchema=[{"AttributeName": "cache_key", "KeyType": "HASH"}]
+        )
         yield table
 
 
@@ -52,7 +50,6 @@ def users_table(aws_credentials):
 # Registration Tests
 # -------------------------------------------------------
 
-@mock_aws
 def test_register_success(users_table):
     with patch("src.api.core.security.get_password_pepper") as mock_pepper:
         mock_pepper.return_value = "test-pepper-value"
@@ -76,7 +73,6 @@ def test_register_success(users_table):
         assert "password_hash" not in data
 
 
-@mock_aws
 def test_register_duplicate_email(users_table):
     with patch("src.api.core.security.get_password_pepper") as mock_pepper:
         mock_pepper.return_value = "test-pepper-value"
@@ -107,7 +103,6 @@ def test_register_duplicate_email(users_table):
         assert response.json()["detail"] == "Registration unsuccessful"
 
 
-@mock_aws
 def test_register_weak_password_no_uppercase(users_table):
     response = client.post(
         "/auth/register",
@@ -121,7 +116,6 @@ def test_register_weak_password_no_uppercase(users_table):
     assert response.status_code == 422
 
 
-@mock_aws
 def test_register_weak_password_no_number(users_table):
     response = client.post(
         "/auth/register",
@@ -135,7 +129,6 @@ def test_register_weak_password_no_number(users_table):
     assert response.status_code == 422
 
 
-@mock_aws
 def test_register_invalid_email(users_table):
     response = client.post(
         "/auth/register",
@@ -153,7 +146,110 @@ def test_register_invalid_email(users_table):
 # Login Tests
 # -------------------------------------------------------
 
-@mock_aws
+
+def test_login_route_locks_out_after_repeated_failures(users_table):
+    with patch("src.api.core.security.get_password_pepper") as mock_pepper:
+        mock_pepper.return_value = "test-pepper-value"
+
+        client.post(
+            "/auth/register",
+            json={
+                "email": "bruteforce@example.com",
+                "password": "TestPass1!",
+                "account_id": "acc_001",
+                "customer_id": "cust_001"
+            }
+        )
+
+        # Fail past MAX_ATTEMPTS using the WRONG password, through the
+        # REAL route — not calling login_lockout.py directly
+        for _ in range(6):
+            response = client.post(
+                "/auth/login",
+                json={"email": "bruteforce@example.com", "password": "WrongPassword1!"}
+            )
+
+        # This 6th response should already be a lockout, not just
+        # another "wrong password" rejection
+        assert response.status_code == 401
+
+        # THE critical assertion — try again with the CORRECT password.
+        # If lockout is genuinely wired into the route, this must still
+        # fail, since the account is locked regardless of credentials.
+        response = client.post(
+            "/auth/login",
+            json={"email": "bruteforce@example.com", "password": "TestPass1!"}
+        )
+        assert response.status_code == 401
+        assert response.json()["detail"] == "Invalid credentials"
+
+
+# ============================================================
+# This is the other half of the brute-force defense: an attacker
+# spraying different emails from ONE IP should get locked out at
+# the IP level, even though no single email ever crosses its own
+# threshold. Proves the actual security value of the dual design,
+# not just that each identifier works in isolation.
+# ============================================================
+
+def test_login_route_locks_out_ip_across_different_emails(users_table):
+    with patch("src.api.core.security.get_password_pepper") as mock_pepper:
+        mock_pepper.return_value = "test-pepper-value"
+
+        # Register 6 distinct, real accounts — simulates an attacker
+        # who has a list of valid emails and is trying each one once,
+        # rather than hammering a single victim
+        for i in range(6):
+            client.post(
+                "/auth/register",
+                json={
+                    "email": f"target{i}@example.com",
+                    "password": "RealPassword1!",
+                    "account_id": f"acc_{i}",
+                    "customer_id": f"cust_{i}"
+                }
+            )
+
+        # Attacker tries each account exactly ONCE, wrong password,
+        # all from the SAME simulated source IP. TestClient doesn't
+        # let us directly set a custom source IP through normal
+        # request params, so we patch request.client.host at the
+        # FastAPI level to simulate one consistent attacking IP.
+        with patch("starlette.requests.Request.client") as mock_client:
+            mock_client.host = "6.6.6.6"
+
+            response = None
+            for i in range(6):
+                response = client.post(
+                    "/auth/login",
+                    json={"email": f"target{i}@example.com", "password": "WrongPassword1!"}
+                )
+
+            # By the 6th distinct email, no INDIVIDUAL email has hit
+            # MAX_ATTEMPTS — but the shared IP has now failed 6 times
+            assert response.status_code == 401
+
+            # THE key assertion — a 7th, completely fresh, never-before-
+            # seen email, same attacking IP, CORRECT password this time.
+            # Must still be blocked, proving the IP lock (not any single
+            # email's lock) is what's actually catching this pattern.
+            client.post(
+                "/auth/register",
+                json={
+                    "email": "brand-new-target@example.com",
+                    "password": "CorrectPassword1!",
+                    "account_id": "acc_new",
+                    "customer_id": "cust_new"
+                }
+            )
+            response = client.post(
+                "/auth/login",
+                json={"email": "brand-new-target@example.com", "password": "CorrectPassword1!"}
+            )
+            assert response.status_code == 401
+            assert response.json()["detail"] == "Invalid credentials"
+
+
 def test_login_success(users_table):
     with patch("src.api.core.security.get_password_pepper") as mock_pepper, \
          patch("src.api.core.security.get_jwt_secret") as mock_secret:
@@ -189,7 +285,6 @@ def test_login_success(users_table):
         assert data["customer_id"] == "cust_001"
 
 
-@mock_aws
 def test_login_wrong_password(users_table):
     with patch("src.api.core.security.get_password_pepper") as mock_pepper:
         mock_pepper.return_value = "test-pepper-value"
@@ -218,7 +313,6 @@ def test_login_wrong_password(users_table):
         assert response.json()["detail"] == "Invalid credentials"
 
 
-@mock_aws
 def test_login_nonexistent_email(users_table):
     with patch("src.api.core.security.get_password_pepper") as mock_pepper:
         mock_pepper.return_value = "test-pepper-value"
@@ -235,7 +329,6 @@ def test_login_nonexistent_email(users_table):
         assert response.json()["detail"] == "Invalid credentials"
 
 
-@mock_aws
 def test_register_weak_password_no_lowercase(users_table):
     response = client.post(
         "/auth/register",
@@ -249,7 +342,6 @@ def test_register_weak_password_no_lowercase(users_table):
     assert response.status_code == 422
 
 
-@mock_aws
 def test_register_weak_password_no_special_character(users_table):
     response = client.post(
         "/auth/register",
@@ -263,7 +355,6 @@ def test_register_weak_password_no_special_character(users_table):
     assert response.status_code == 422
 
 
-@mock_aws
 def test_login_uniform_error_message(users_table):
     with patch("src.api.core.security.get_password_pepper") as mock_pepper:
         mock_pepper.return_value = "test-pepper-value"
@@ -306,7 +397,6 @@ def test_login_uniform_error_message(users_table):
 # Demo Endpoint Tests
 # -------------------------------------------------------
 
-@mock_aws
 def test_demo_returns_token(users_table):
     with patch("src.api.core.security.get_password_pepper") as mock_pepper, \
          patch("src.api.core.security.get_jwt_secret") as mock_secret:
@@ -324,7 +414,6 @@ def test_demo_returns_token(users_table):
         assert data["customer_id"] == "cust_demo_001"
 
 
-@mock_aws
 def test_demo_self_healing(users_table):
     with patch("src.api.core.security.get_password_pepper") as mock_pepper, \
          patch("src.api.core.security.get_jwt_secret") as mock_secret:

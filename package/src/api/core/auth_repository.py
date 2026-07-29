@@ -3,6 +3,7 @@ from fastapi import HTTPException
 from src.api.core.security import hash_password, verify_password, create_jwt
 from src.api.core.users_db import get_user_by_email, create_user
 from src.api.models.user import UserRegisterRequest, UserLoginRequest, TokenResponse, UserResponse
+from src.api.core.login_lockout import check_login_lockout, record_failed_login, clear_login_attempts
 
 # Demo account credentials — business data, not a routing concern,
 # so it belongs here alongside the logic that actually uses it
@@ -60,12 +61,16 @@ async def register(request: UserRegisterRequest):
 # ============================================================
 # 2. POST /login
 # ============================================================
-async def login(request: UserLoginRequest) -> TokenResponse:
+async def login(request: UserLoginRequest, source_ip: str) -> TokenResponse:
+    if check_login_lockout(request.email, source_ip):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
     # Fetch user by email — O(1) DynamoDB get_item on partition key
     user = get_user_by_email(request.email)
     JWT_EXP_TIME = datetime.now() + timedelta(seconds=900)
 
     if user is None:
+        # record the failed attempt of a ip logging in with unregistered emails
+        record_failed_login(request.email, source_ip)
         # User not found — same error as wrong password
         # Uniform response prevents email enumeration
         raise HTTPException(
@@ -78,6 +83,8 @@ async def login(request: UserLoginRequest) -> TokenResponse:
     password_valid = verify_password(request.password, user["password_hash"])
 
     if not password_valid:
+        # same thing as the check in email, make sure the hacker isn't able to brute force the password
+        record_failed_login(request.email, source_ip)
         # Wrong password — same error as user not found
         # Attacker cannot distinguish between the two failure modes
         raise HTTPException(
@@ -93,6 +100,8 @@ async def login(request: UserLoginRequest) -> TokenResponse:
             status_code=401,
             detail="Invalid credentials"
         )
+    
+    clear_login_attempts(request.email, source_ip)
 
     # Issue JWT — 15 minute expiry
     # Short window limits damage if token is stolen

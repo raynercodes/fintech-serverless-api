@@ -64,6 +64,7 @@ Globals:
         AUDIT_LOG_BUCKET_NAME: !Ref FintechAuditLogBucket
         PROD_CUSTOM_DOMAIN: "https://fintech.raynercodes.dev"
         ROOT_PATH: !If [IsProd, "", !Sub "/${Environment}"]
+        SES_FROM_ADDRESS: "alerts@security.raynercodes.dev" 
 
 Resources:
 

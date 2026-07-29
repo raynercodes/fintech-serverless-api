@@ -8,7 +8,6 @@ from unittest.mock import patch
 from jose import jwt
 
 # Set environment variables before imports
-os.environ["DYNAMODB_TABLE_NAME"] = "fintech-transactions-test"
 os.environ["CACHE_TABLE_NAME"] = "fintech-cache-test"
 os.environ["SQS_QUEUE_URL"] = "https://sqs.us-east-1.amazonaws.com/123456789/fintech-test.fifo"
 os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
@@ -19,15 +18,6 @@ os.environ["APP_VERSION"] = "1.0.0"
 os.environ["ENVIRONMENT"] = "test"
 
 TEST_JWT_SECRET = "test-secret-key-for-unit-tests-only"
-
-
-@pytest.fixture
-def aws_credentials():
-    os.environ["AWS_ACCESS_KEY_ID"] = "testing"
-    os.environ["AWS_SECRET_ACCESS_KEY"] = "testing"
-    os.environ["AWS_SECURITY_TOKEN"] = "testing"
-    os.environ["AWS_SESSION_TOKEN"] = "testing"
-
 
 @pytest.fixture
 def cache_table(aws_credentials):
@@ -68,7 +58,6 @@ def make_authorizer_event(token: str, method_arn: str = "arn:aws:execute-api:us-
 # JWT Tests
 # -------------------------------------------------------
 
-@mock_aws
 def test_valid_jwt_returns_allow(cache_table):
     from src.authorizer.handler import handler
 
@@ -88,7 +77,6 @@ def test_valid_jwt_returns_allow(cache_table):
     assert result["context"]["customer_id"] == "cust_001"
 
 
-@mock_aws
 def test_invalid_jwt_returns_deny(cache_table):
     from src.authorizer.handler import handler
 
@@ -101,7 +89,6 @@ def test_invalid_jwt_returns_deny(cache_table):
     assert result["policyDocument"]["Statement"][0]["Effect"] == "Deny"
 
 
-@mock_aws
 def test_missing_bearer_prefix_returns_deny(cache_table):
     from src.authorizer.handler import handler
 
@@ -113,7 +100,6 @@ def test_missing_bearer_prefix_returns_deny(cache_table):
     assert result["policyDocument"]["Statement"][0]["Effect"] == "Deny"
 
 
-@mock_aws
 def test_empty_token_returns_deny(cache_table):
     from src.authorizer.handler import handler
 
@@ -129,7 +115,6 @@ def test_empty_token_returns_deny(cache_table):
 # Brute Force Tests
 # -------------------------------------------------------
 
-@mock_aws
 def test_brute_force_no_lockout_before_max_attempts(cache_table):
     from src.authorizer.handler import (
         record_failed_attempt,
@@ -147,7 +132,6 @@ def test_brute_force_no_lockout_before_max_attempts(cache_table):
         assert not is_locked, f"Should not be locked after {i + 1} attempts"
 
 
-@mock_aws
 def test_brute_force_locks_after_max_attempts(cache_table):
     from src.authorizer.handler import (
         record_failed_attempt,
@@ -169,7 +153,6 @@ def test_brute_force_locks_after_max_attempts(cache_table):
     assert remaining <= LOCKOUT_WINDOWS[0], "Should be in first lockout window"
 
 
-@mock_aws
 def test_brute_force_clears_on_successful_auth(cache_table):
     from src.authorizer.handler import (
         record_failed_attempt,
@@ -189,7 +172,6 @@ def test_brute_force_clears_on_successful_auth(cache_table):
     assert not is_locked, "Should not be locked after clearing"
 
 
-@mock_aws
 def test_brute_force_progressive_escalation(cache_table):
     from src.authorizer.handler import (
         record_failed_attempt,
@@ -220,7 +202,6 @@ def test_brute_force_progressive_escalation(cache_table):
     assert remaining <= LOCKOUT_WINDOWS[1]
 
 
-@mock_aws
 def test_locked_account_denied_in_handler(cache_table):
     from src.authorizer.handler import (
         handler,

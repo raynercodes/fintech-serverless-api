@@ -1,5 +1,5 @@
 import os
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Request
 from fastapi.security import HTTPBearer
 from src.api.models.user import (
     UserRegisterRequest,
@@ -70,8 +70,9 @@ Token expires in **15 minutes**.
 **Note:** You can always refer back to the Steps at the top of the page when needed.
     """
 )
-async def login(request: UserLoginRequest):
-    return await auth_repository.login(request)
+async def login(request: UserLoginRequest, req: Request):
+    source_ip = req.client.host
+    return await auth_repository.login(request, source_ip)
 
 
 @router.post(

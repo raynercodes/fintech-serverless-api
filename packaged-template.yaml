@@ -213,6 +213,11 @@ Resources:
             Resource: '*'
           - Effect: Allow
             Action:
+            - ses:SendEmail
+            - ses:SendRawEmail
+            Resource: !Sub arn:aws:ses:us-east-1:${AWS::AccountId}:identity/security.raynercodes.dev
+          - Effect: Allow
+            Action:
             - s3:PutObject
             - s3:GetObject
             Resource:
