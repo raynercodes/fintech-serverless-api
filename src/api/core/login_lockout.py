@@ -167,7 +167,7 @@ def record_failed_login(email: str, source_ip: str) -> dict:
     # check_login_lockout's OR logic), just through a longer timed wait,
     # never through emailing whoever's request happened to trip it.
     if email_result["just_escalated"]:
-        _send_verification_email(email)
+        _send_verification_email(email, source_ip)
 
     return email_result
 
