@@ -276,6 +276,12 @@ Resources:
                   - s3:PutObject
                   - s3:GetObject
                 Resource: !Sub ${FintechAuditLogBucket.Arn}/*
+              # SES — scoped to ONLY this verified identity, not "*".
+              - Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - ses:SendRawEmail
+                Resource: !Sub arn:aws:ses:us-east-1:${AWS::AccountId}:identity/security.raynercodes.dev
               # Explicit DENY — even if a future policy change accidentally
               # grants delete permissions somewhere else, an explicit Deny
               # ALWAYS wins over any Allow in IAM evaluation. This is a
