@@ -77,8 +77,6 @@ def _send_verification_email(email: str, source_ip: str) -> None:
 def _get_record(identifier_key: str) -> dict:
     table = get_cache_table()
     print(f"DEBUG — table object id: {id(table)}, table name: {table.table_name}")
-    all_items = table.scan()
-    print(f"DEBUG — full table contents as seen by app code: {all_items.get('Items')}")
     result = table.get_item(Key={"cache_key": identifier_key})
     return result.get("Item", {})
 
