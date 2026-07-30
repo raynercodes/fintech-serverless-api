@@ -61,13 +61,50 @@ def _send_verification_email(email: str, source_ip: str, token: str) -> None:
         "— RaynerCodes Security Team"
     )
 
+    body_html = f"""
+    <html>
+    <body style="font-family: Arial, sans-serif; color: #333333; line-height: 1.5;">
+        <p>We noticed repeated failed login attempts on your account: <strong>{email}</strong>,
+        originating from IP address <strong>{source_ip}</strong>. To help protect your information,
+        we've temporarily paused login access until you verify it's really you.</p>
+
+        <p style="text-align: center; margin: 30px 0;">
+            <a href="{verify_url}"
+               style="background-color: #2e7d32; color: #ffffff; padding: 14px 28px;
+                      text-decoration: none; border-radius: 6px; font-weight: bold;
+                      display: inline-block; font-size: 16px;">
+                Verify My Identity
+            </a>
+        </p>
+
+        <p style="font-size: 13px; color: #666666;">
+            This link can only be used once and will expire once used.
+        </p>
+
+        <p>If you did not attempt to log in recently, we recommend changing your password
+        once you regain access.</p>
+
+        <hr style="border: none; border-top: 1px solid #eeeeee; margin: 20px 0;">
+
+        <p style="font-size: 12px; color: #999999;">
+            This is an automated security notification. Please do not reply. If you did not
+            request this, no further action is needed — your account remains protected.<br><br>
+            — RaynerCodes Security Team
+        </p>
+    </body>
+    </html>
+    """
+
     try:
         ses.send_email(
             Source=from_address,
             Destination={"ToAddresses": [email]},
             Message={
                 "Subject": {"Data": subject, "Charset": "UTF-8"},
-                "Body": {"Text": {"Data": body_text, "Charset": "UTF-8"}}
+                "Body": {
+                    "Text": {"Data": body_text, "Charset": "UTF-8"},
+                    "Html": {"Data": body_html, "Charset": "UTF-8"}
+                }
             }
         )
     except Exception as e:
