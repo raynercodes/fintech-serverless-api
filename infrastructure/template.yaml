@@ -230,6 +230,7 @@ Resources:
                   - !GetAtt FintechTransactionsTable.Arn
                   - !Sub ${FintechTransactionsTable.Arn}/index/*
                   - !GetAtt FintechCacheTable.Arn
+                  - !Sub ${FintechCacheTable.Arn}/index/*
                   - !GetAtt FintechUsersTable.Arn
               # SQS — scoped to fintech queue only
               - Effect: Allow
@@ -757,9 +758,18 @@ Resources:
       AttributeDefinitions:
         - AttributeName: cache_key
           AttributeType: S
+        - AttributeName: verification_token
+          AttributeType: S
       KeySchema:
         - AttributeName: cache_key
           KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: verification-token-index
+          KeySchema:
+            - AttributeName: verification_token
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
       TimeToLiveSpecification:
         AttributeName: expires_at
         Enabled: true

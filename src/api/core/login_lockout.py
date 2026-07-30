@@ -5,6 +5,8 @@ import time
 from src.api.core.database import get_cache_table
 import os
 import boto3
+import secrets
+from boto3.dynamodb.conditions import Key
 
 MAX_ATTEMPTS = 5
 # Explicit stage list — deliberately NOT a flat list of integers.
@@ -39,19 +41,22 @@ def _get_ses_client():
         _ses_client = boto3.client("ses", region_name="us-east-1")
     return _ses_client
 
-def _send_verification_email(email: str, source_ip: str) -> None:
+def _send_verification_email(email: str, source_ip: str, token: str) -> None:
     ses = _get_ses_client()
     from_address = os.environ.get("SES_FROM_ADDRESS", "alerts@security.raynercodes.dev")
+    verify_url = f"https://fintech.raynercodes.dev/auth/verify?token={token}"
 
     subject = "Action Required — Please Verify Your Identity to Continue"
     body_text = (
-        "We noticed repeated failed login attempts on your account, "
+        f"We noticed repeated failed login attempts on your account:{email}, "
         f"originating from IP address {source_ip}. To help protect your "
         "information, we've temporarily paused login access until you "
         "verify it's really you.\n\n"
+        f"Click here to verify: {verify_url}\n\n"
+        "This link can only be used once and will expire once used.\n\n"
         "If you did not attempt to log in recently, we recommend changing "
         "your password once you regain access.\n\n"
-        "This is an automated security notification. If you did not request "
+        "This is an automated security notification. Please do not reply. If you did not request "
         "this, no further action is needed — your account remains protected.\n\n"
         "— RaynerCodes Security Team"
     )
@@ -119,6 +124,7 @@ def _record_failure_for_identifier(identifier_key: str, stages: list) -> dict:
     lockout_count = int(record.get("lockout_count", 0))
     just_locked = False
     just_escalated = False
+    verification_token = None
 
     if attempts > MAX_ATTEMPTS:
         lockout_count += 1
@@ -128,11 +134,15 @@ def _record_failure_for_identifier(identifier_key: str, stages: list) -> dict:
 
         if stage["type"] == "verification":
             just_escalated = True
+            # token_urlsafe(32) gives 256 bits of entropy, safe to put
+            # directly in a URL with no extra encoding needed.
+            verification_token = secrets.token_urlsafe(32)
             get_cache_table().put_item(Item={
                 "cache_key": identifier_key,
                 "attempts": attempts,
                 "lockout_count": lockout_count,
                 "requires_verification": True,
+                "verification_token": verification_token,
                 "expires_at": now + 86400 * 7
             })
         else:
@@ -153,7 +163,8 @@ def _record_failure_for_identifier(identifier_key: str, stages: list) -> dict:
 
     return {"just_locked": just_locked,
             "just_escalated": just_escalated,
-            "lockout_count": lockout_count
+            "lockout_count": lockout_count,
+            "verification_token": verification_token if just_escalated else None
     }
 
 
@@ -167,9 +178,38 @@ def record_failed_login(email: str, source_ip: str) -> dict:
     # check_login_lockout's OR logic), just through a longer timed wait,
     # never through emailing whoever's request happened to trip it.
     if email_result["just_escalated"]:
-        _send_verification_email(email, source_ip)
+        _send_verification_email(email, source_ip, email_result["verification_token"])
 
     return email_result
+
+
+def find_email_by_verification_token(token: str) -> str | None:
+    """
+    Reverse lookup — given only a token, find which email it belongs
+    to. Uses the GSI since verification_token isn't the partition key.
+    Returns None for an unknown, already-used, or expired token — the
+    caller treats all three identically, so nothing about WHY a token
+    failed ever leaks back to whoever's holding it.
+    """
+    table = get_cache_table()
+    result = table.query(
+        IndexName="verification-token-index",
+        KeyConditionExpression=Key("verification_token").eq(token)
+    )
+    items = result.get("Items", [])
+    if not items:
+        return None
+
+    item = items[0]
+    cache_key = item["cache_key"]
+    # cache_key looks like "login_lockout:email:someone@example.com" —
+    # only ever match EMAIL records, never an IP record (IP identifiers
+    # never get a verification_token in the first place, per the
+    # earlier fix, but this is a second, explicit safety check)
+    if not cache_key.startswith("login_lockout:email:"):
+        return None
+
+    return cache_key.replace("login_lockout:email:", "", 1)
 
 
 def clear_login_attempts(email: str, source_ip: str) -> None:

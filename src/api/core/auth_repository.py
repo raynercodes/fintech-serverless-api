@@ -3,7 +3,13 @@ from fastapi import HTTPException
 from src.api.core.security import hash_password, verify_password, create_jwt
 from src.api.core.users_db import get_user_by_email, create_user
 from src.api.models.user import UserRegisterRequest, UserLoginRequest, TokenResponse, UserResponse
-from src.api.core.login_lockout import check_login_lockout, record_failed_login, clear_login_attempts
+from src.api.core.login_lockout import (
+    check_login_lockout,
+    record_failed_login,
+    clear_login_attempts,
+    find_email_by_verification_token,
+    clear_verification_requirement
+)
 
 # Demo account credentials — business data, not a routing concern,
 # so it belongs here alongside the logic that actually uses it
@@ -160,3 +166,12 @@ async def demo_login() -> TokenResponse:
         account_id=DEMO_ACCOUNT_ID,
         customer_id=DEMO_CUSTOMER_ID
     )
+
+
+async def verify_login(token: str) -> dict:
+    email = find_email_by_verification_token(token)
+    if email is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification link")
+
+    clear_verification_requirement(email)
+    return {"message": "Identity verified. You may now attempt to log in again."}

@@ -15,6 +15,8 @@ from src.api.core.login_lockout import (
     clear_verification_requirement, MAX_ATTEMPTS, IP_STAGES, EMAIL_STAGES
 )
 import src.api.core.database as database_module
+from boto3.dynamodb.conditions import Key
+from src.api.core.login_lockout import find_email_by_verification_token
 
 
 @pytest.fixture
@@ -24,8 +26,20 @@ def cache_table(aws_credentials):
         table = dynamodb.create_table(
             TableName="fintech-cache-test",
             BillingMode="PAY_PER_REQUEST",
-            AttributeDefinitions=[{"AttributeName": "cache_key", "AttributeType": "S"}],
+            AttributeDefinitions=[
+                {"AttributeName": "cache_key", "AttributeType": "S"},
+                {"AttributeName": "verification_token", "AttributeType": "S"}
+            ],
             KeySchema=[{"AttributeName": "cache_key", "KeyType": "HASH"}],
+            GlobalSecondaryIndexes=[
+                {
+                    "IndexName": "verification-token-index",
+                    "KeySchema": [
+                        {"AttributeName": "verification_token", "KeyType": "HASH"}
+                    ],
+                    "Projection": {"ProjectionType": "ALL"}
+                }
+            ]
         )
         yield table
 
@@ -360,3 +374,141 @@ def test_fallback_value_correctly_re_triggers_verification_on_next_failure(mock_
 
     item = cache_table.get_item(Key={"cache_key": f"login_lockout:email:{email}"})["Item"]
     assert item["requires_verification"] is True
+
+# ============================================================
+# Verification token — reverse lookup and single-use behavior.
+# This is the actual security property you specifically caught
+# a design gap on: a link must become permanently inert the
+# instant it's used, not just "harmless to reuse."
+# ============================================================
+
+@mock_aws
+@patch("src.api.core.login_lockout._send_verification_email")
+def test_stage3_generates_a_real_verification_token(mock_send_email, cache_table):
+    email = "token-gen@example.com"
+    ip = "10.10.10.1"
+    cache_table.put_item(Item={
+        "cache_key": f"login_lockout:email:{email}",
+        "attempts": MAX_ATTEMPTS,
+        "lockout_count": 2,
+        "expires_at": int(time.time()) + 86400
+    })
+
+    result = record_failed_login(email, ip)
+
+    assert result["verification_token"] is not None
+    assert len(result["verification_token"]) > 20  # genuinely random, not a placeholder
+
+    item = cache_table.get_item(Key={"cache_key": f"login_lockout:email:{email}"})["Item"]
+    assert item["verification_token"] == result["verification_token"]
+
+
+@mock_aws
+@patch("src.api.core.login_lockout._send_verification_email")
+def test_email_stage_never_gets_a_token_before_stage3(mock_send_email, cache_table):
+    """A Stage 1 or Stage 2 timed lockout should NEVER carry a
+    verification_token — only Stage 3 does. Confirms the GSI stays
+    genuinely small/sparse, containing only real Stage 3 records."""
+    result = record_failed_login("no-token-yet@example.com", "10.10.10.2")
+    assert result.get("verification_token") is None
+
+
+def test_find_email_by_token_returns_correct_email(cache_table):
+    email = "lookup-test@example.com"
+    token = "test-token-abc123"
+    cache_table.put_item(Item={
+        "cache_key": f"login_lockout:email:{email}",
+        "attempts": 6,
+        "lockout_count": 3,
+        "requires_verification": True,
+        "verification_token": token,
+        "expires_at": int(time.time()) + 86400
+    })
+
+    found_email = find_email_by_verification_token(token)
+    assert found_email == email
+
+
+def test_find_email_by_unknown_token_returns_none(cache_table):
+    assert find_email_by_verification_token("this-token-does-not-exist") is None
+
+
+def test_find_email_by_token_never_matches_an_ip_record(cache_table):
+    """Explicit safety check — an IP record should structurally never
+    have a verification_token at all (per the EMAIL_STAGES/IP_STAGES
+    split), but this proves the lookup itself also refuses to treat
+    an IP-keyed row as a valid match even if one somehow existed."""
+    cache_table.put_item(Item={
+        "cache_key": "login_lockout:ip:6.6.6.6",
+        "attempts": 6,
+        "lockout_count": 3,
+        "verification_token": "leaked-token-on-ip-record",
+        "expires_at": int(time.time()) + 86400
+    })
+
+    assert find_email_by_verification_token("leaked-token-on-ip-record") is None
+
+
+# ============================================================
+# THE key correctness proof — a token is genuinely single-use.
+# This is the exact gap you caught before writing any code.
+# ============================================================
+
+def test_verifying_clears_the_token_making_it_unusable_again(cache_table):
+    email = "single-use@example.com"
+    token = "one-time-token-xyz"
+    cache_table.put_item(Item={
+        "cache_key": f"login_lockout:email:{email}",
+        "attempts": 6,
+        "lockout_count": 3,
+        "requires_verification": True,
+        "verification_token": token,
+        "expires_at": int(time.time()) + 86400
+    })
+
+    # First use — succeeds
+    found_email = find_email_by_verification_token(token)
+    assert found_email == email
+    clear_verification_requirement(found_email)
+
+    # Second use of the SAME token — must now find nothing at all
+    assert find_email_by_verification_token(token) is None
+
+
+def test_a_failed_attempt_between_clicks_is_not_erased_by_a_stale_link(cache_table):
+    """
+    The EXACT scenario you were worried about: user clicks the link
+    (clearing verification), then fails a login once (attempts moves
+    toward 1), then somehow clicks the SAME old link again. Since the
+    token is already gone from the record, this second click must find
+    nothing — it must NOT be able to reset attempts a second time and
+    silently erase that real, legitimate failed attempt.
+    """
+    email = "stale-link@example.com"
+    ip = "10.10.10.3"
+    token = "stale-token-123"
+
+    cache_table.put_item(Item={
+        "cache_key": f"login_lockout:email:{email}",
+        "attempts": 6,
+        "lockout_count": 3,
+        "requires_verification": True,
+        "verification_token": token,
+        "expires_at": int(time.time()) + 86400
+    })
+
+    # First click — legitimate use
+    clear_verification_requirement(find_email_by_verification_token(token))
+
+    # A real failed login happens after verifying
+    record_failed_login(email, ip)
+    item_after_failure = cache_table.get_item(Key={"cache_key": f"login_lockout:email:{email}"})["Item"]
+    assert int(item_after_failure["attempts"]) == 1
+
+    # Attacker (or the user by accident) clicks the SAME OLD link again
+    stale_lookup = find_email_by_verification_token(token)
+    assert stale_lookup is None  # token is gone — nothing to act on
+
+    # Confirm the real attempt from a moment ago was never touched
+    item_final = cache_table.get_item(Key={"cache_key": f"login_lockout:email:{email}"})["Item"]
+    assert int(item_final["attempts"]) == 1

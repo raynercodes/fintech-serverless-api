@@ -91,3 +91,8 @@ Use this to instantly test all protected endpoints from the Swagger UI.
 )
 async def demo_login():
     return await auth_repository.demo_login()
+
+
+@router.get("/verify", include_in_schema=False)
+async def verify_login(token: str):
+    return await auth_repository.verify_login(token)
