@@ -506,6 +506,14 @@ Resources:
             Method: POST
             Auth:
               Authorizer: NONE
+        AuthVerifyEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref FintechApi
+            Path: /auth/verify
+            Method: GET
+            Auth:
+              Authorizer: NONE
 
   # -------------------------------------------------------
   # Lambda — Authorizer Function
